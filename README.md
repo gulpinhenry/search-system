@@ -33,5 +33,5 @@
     ../build/merger
     ```
 
-
+[MSMarco Passage Ranking dataset](https://microsoft.github.io/msmarco/Datasets.html) extract collection.tsv into data directory
     

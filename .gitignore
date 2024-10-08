@@ -1,1 +1,5 @@
-data/collection.tsv
+*.tsv
+*.log
+*.dat
+*.txt
+*.bin

@@ -2,11 +2,9 @@
 #define COMPRESSION_H
 
 #include <vector>
+#include <cstdint>
 
-// Function to encode a vector of integers using varbyte encoding (simple placeholder implementation)
-std::vector<int> VarbyteEncode(const std::vector<int> &input);
+std::vector<unsigned char> varbyteEncodeList(const std::vector<int> &numbers);
+std::vector<int> varbyteDecodeList(const std::vector<unsigned char> &bytes);
 
-// Function to decode a vector of varbyte encoded integers
-std::vector<int> VarbyteDecode(const std::vector<int> &encoded);
-
-#endif
+#endif // COMPRESSION_H
