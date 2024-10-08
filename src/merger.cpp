@@ -1,199 +1,206 @@
 #include "merger.h"
 #include "compression.h"
-#include <fstream>
 #include <iostream>
+#include <fstream>
 #include <vector>
-#include <queue>
 #include <string>
+#include <queue>
+#include <tuple>
 #include <unordered_map>
-#include <sstream>
+#include <cstdint>
+#include <functional>
 #include <filesystem>
-#include <algorithm>
-#include <regex>
 #include <ctime>
-#include <cerrno>  // for errno
-#include <cstring> // for strerror
 
 namespace fs = std::filesystem;
 
-#define BLOCK_SIZE 64  // Number of postings per block
-#define MAX_OPEN_FILES 10  // Maximum number of files to be opened at the same time
+// Log messages to a file (for debugging purposes)
+std::ofstream logFile("../logs/merge.log", std::ios::app);
 
-// Log file
-std::ofstream logFile("../logs/merger.log", std::ios::app);
-
-// Function to log messages to the log file with a timestamp
 void logMessage(const std::string &message) {
+    if (!logFile.is_open()) {
+        std::cerr << "Failed to open log file!" << std::endl;
+        return;
+    }
     std::time_t currentTime = std::time(nullptr);
     logFile << std::asctime(std::localtime(&currentTime)) << message << std::endl;
 }
 
-
-// Function to load the next posting from the file and push it into the heap
-bool loadNextPosting(std::ifstream &file, int fileIndex, std::priority_queue<PostingEntry, std::vector<PostingEntry>, std::greater<>> &minHeap) {
-    std::vector<unsigned char> docIDBuffer;
-    std::vector<unsigned char> freqBuffer;
-    int blockSize = BLOCK_SIZE * 2; // assuming blocks of docID and frequency are equal in size
-
-    // Read binary data for docIDs and frequencies
-    docIDBuffer.resize(blockSize);
-    freqBuffer.resize(blockSize);
-
-    // Read the docIDs
-    if (!file.read(reinterpret_cast<char*>(docIDBuffer.data()), blockSize)) {
-        logMessage("Error reading docIDs from fileIndex: " + std::to_string(fileIndex) + ". Possible format issue.");
-        return false;
+void mergeTempFiles(int numFiles, std::unordered_map<std::string, LexiconEntry> &lexicon) {
+    // Open all temp files
+    std::vector<std::ifstream> tempFiles(numFiles);
+    for (int i = 0; i < numFiles; ++i) {
+        tempFiles[i].open("../data/intermediate/temp" + std::to_string(i) + ".bin", std::ios::binary);
+        if (!tempFiles[i].is_open()) {
+            logMessage("Error opening temp file for merging.");
+            return;
+        }
     }
 
-    // Read the frequencies
-    if (!file.read(reinterpret_cast<char*>(freqBuffer.data()), blockSize)) {
-        logMessage("Error reading frequencies from fileIndex: " + std::to_string(fileIndex) + ". Possible format issue.");
-        return false;
-    }
-
-    // Decode docIDs and frequencies
-    std::vector<int> docIDs = varbyteDecodeList(docIDBuffer);
-    std::vector<int> frequencies = varbyteDecodeList(freqBuffer);
-
-    // Push each posting into the heap
-    for (size_t i = 0; i < docIDs.size(); ++i) {
-        minHeap.push({"term_placeholder", docIDs[i], frequencies[i], fileIndex});
-        logMessage("Loaded posting: docID=" + std::to_string(docIDs[i]) + ", freq=" + std::to_string(frequencies[i]));
-    }
-
-    return true;
-}
-
-// Function to compress and write a block of postings to the output file
-void writeCompressedBlock(std::ofstream &binFile, const std::vector<int> &docIDs, const std::vector<int> &frequencies, 
-                          std::vector<int> &lastdocid, std::vector<int> &docidsize, std::vector<int> &freqsize) {
-    std::vector<unsigned char> compressedDocIDs = varbyteEncodeList(docIDs);
-    std::vector<unsigned char> compressedFrequencies = varbyteEncodeList(frequencies);
-
-    binFile.write(reinterpret_cast<char*>(compressedDocIDs.data()), compressedDocIDs.size());
-    binFile.write(reinterpret_cast<char*>(compressedFrequencies.data()), compressedFrequencies.size());
-
-    lastdocid.push_back(docIDs.back());
-    docidsize.push_back(compressedDocIDs.size());
-    freqsize.push_back(compressedFrequencies.size());
-}
-
-// Helper function to extract the numeric part from a filename like "temp123.bin"
-int extractFileNumber(const std::string &filename) {
-    std::regex pattern("temp(\\d+)\\.bin");
-    std::smatch match;
-    if (std::regex_search(filename, match, pattern)) {
-        return std::stoi(match[1]);
-    }
-    return -1;
-}
-
-// Function to merge a batch of sorted files into a final compressed index
-void mergeSortedFilesBatch(const std::vector<std::string> &inputFiles, const std::string &outputFile) {
-    logMessage("Starting batch merge process...");
-
-    std::ofstream binFile(outputFile, std::ios::binary);
-    if (!binFile.is_open()) {
-        logMessage("Error opening output file: " + outputFile);
+    // Output index file
+    std::ofstream indexFile("../data/index.bin", std::ios::binary);
+    if (!indexFile.is_open()) {
+        logMessage("Error opening index file for writing.");
         return;
     }
 
-    std::vector<int> lastdocid, docidsize, freqsize;
-    std::vector<int> docIDs, frequencies;
-
-    std::priority_queue<PostingEntry, std::vector<PostingEntry>, std::greater<>> minHeap;
-
-    for (size_t batchStart = 0; batchStart < inputFiles.size(); batchStart += MAX_OPEN_FILES) {
-        size_t batchEnd = std::min(batchStart + MAX_OPEN_FILES, inputFiles.size());
-
-        std::vector<std::ifstream> inputStreams(batchEnd - batchStart);
-        for (size_t i = batchStart; i < batchEnd; ++i) {
-            logMessage("Attempting to open file: " + inputFiles[i]);
-            inputStreams[i - batchStart].open(inputFiles[i]);
-            if (!inputStreams[i - batchStart].is_open()) {
-                std::string errorMessage = "Error opening file: " + inputFiles[i] + " - " + std::strerror(errno);
-                logMessage(errorMessage);
-                continue;
-            }
+    // Priority queue for merging
+    auto cmp = [](const std::tuple<std::string, int, int> &a, const std::tuple<std::string, int, int> &b) {
+        if (std::get<0>(a) == std::get<0>(b)) {
+            return std::get<1>(a) > std::get<1>(b);  // Compare docIDs
         }
+        return std::get<0>(a) > std::get<0>(b);  // Compare terms
+    };
+    std::priority_queue<std::tuple<std::string, int, int>, std::vector<std::tuple<std::string, int, int>>, decltype(cmp)> pq(cmp);
 
-        for (size_t i = 0; i < inputStreams.size(); ++i) {
-            if (!loadNextPosting(inputStreams[i], i + batchStart, minHeap)) {
-                logMessage("Error loading initial posting from file: " + inputFiles[i + batchStart]);
-            }
-        }
+    // Initial read from each temp file
+    for (int i = 0; i < numFiles; ++i) {
+        if (tempFiles[i].peek() != EOF) {
+            uint16_t termLength;
+            tempFiles[i].read(reinterpret_cast<char*>(&termLength), sizeof(termLength));
+            std::string term(termLength, ' ');
+            tempFiles[i].read(&term[0], termLength);
+            int docID;
+            tempFiles[i].read(reinterpret_cast<char*>(&docID), sizeof(docID));
 
-        while (!minHeap.empty()) {
-            PostingEntry current = minHeap.top();
-            minHeap.pop();
-
-            docIDs.push_back(current.docID);
-            frequencies.push_back(current.frequency);
-
-            if (docIDs.size() == BLOCK_SIZE) {
-                writeCompressedBlock(binFile, docIDs, frequencies, lastdocid, docidsize, freqsize);
-                docIDs.clear();
-                frequencies.clear();
-            }
-
-            if (!loadNextPosting(inputStreams[current.fileIndex - batchStart], current.fileIndex, minHeap)) {
-                inputStreams[current.fileIndex - batchStart].close();
-            }
+            pq.push(std::make_tuple(term, docID, i));
         }
     }
 
+    std::string currentTerm;
+    std::vector<int> docIDs;
+    int64_t offset = 0;
+
+    while (!pq.empty()) {
+        auto [term, docID, fileIndex] = pq.top();
+        pq.pop();
+
+        if (currentTerm.empty()) {
+            currentTerm = term;
+        }
+
+        if (term != currentTerm) {
+            // Write postings list for currentTerm
+            LexiconEntry entry;
+            entry.offset = offset;
+            entry.docFrequency = docIDs.size();
+
+            // Compress docIDs
+            std::vector<int> gaps(docIDs.size());
+            gaps[0] = docIDs[0];
+            for (size_t i = 1; i < docIDs.size(); ++i) {
+                gaps[i] = docIDs[i] - docIDs[i - 1];
+            }
+            std::vector<unsigned char> compressedDocIDs = varbyteEncodeList(gaps);
+            entry.length = compressedDocIDs.size();
+
+            // Write to index file
+            indexFile.write(reinterpret_cast<char*>(compressedDocIDs.data()), compressedDocIDs.size());
+            offset += compressedDocIDs.size();
+
+            // Update lexicon
+            lexicon[currentTerm] = entry;
+
+            // Reset for new term
+            currentTerm = term;
+            docIDs.clear();
+        }
+
+        docIDs.push_back(docID);
+
+        // Read next term-docID pair from the same temp file
+        if (tempFiles[fileIndex].peek() != EOF) {
+            uint16_t termLength;
+            tempFiles[fileIndex].read(reinterpret_cast<char*>(&termLength), sizeof(termLength));
+            std::string nextTerm(termLength, ' ');
+            tempFiles[fileIndex].read(&nextTerm[0], termLength);
+            int nextDocID;
+            tempFiles[fileIndex].read(reinterpret_cast<char*>(&nextDocID), sizeof(nextDocID));
+
+            pq.push(std::make_tuple(nextTerm, nextDocID, fileIndex));
+        }
+    }
+
+    // Write postings list for the last term
     if (!docIDs.empty()) {
-        writeCompressedBlock(binFile, docIDs, frequencies, lastdocid, docidsize, freqsize);
+        LexiconEntry entry;
+        entry.offset = offset;
+        entry.docFrequency = docIDs.size();
+
+        // Compress docIDs
+        std::vector<int> gaps(docIDs.size());
+        gaps[0] = docIDs[0];
+        for (size_t i = 1; i < docIDs.size(); ++i) {
+            gaps[i] = docIDs[i] - docIDs[i - 1];
+        }
+        std::vector<unsigned char> compressedDocIDs = varbyteEncodeList(gaps);
+        entry.length = compressedDocIDs.size();
+
+        // Write to index file
+        indexFile.write(reinterpret_cast<char*>(compressedDocIDs.data()), compressedDocIDs.size());
+        offset += compressedDocIDs.size();
+
+        // Update lexicon
+        lexicon[currentTerm] = entry;
     }
 
-    std::ofstream metaFile(outputFile + "_metadata.bin", std::ios::binary);
-    for (size_t i = 0; i < lastdocid.size(); ++i) {
-        metaFile.write(reinterpret_cast<const char*>(&lastdocid[i]), sizeof(int));
-        metaFile.write(reinterpret_cast<const char*>(&docidsize[i]), sizeof(int));
-        metaFile.write(reinterpret_cast<const char*>(&freqsize[i]), sizeof(int));
+    // Close files
+    for (auto &file : tempFiles) {
+        file.close();
     }
-    metaFile.close();
+    indexFile.close();
+    logMessage("Merging completed.");
+}
 
-    binFile.close();
-    logMessage("Batch merge completed and final index written to: " + outputFile);
+// Write the lexicon to a binary file
+void writeLexiconToFile(const std::unordered_map<std::string, LexiconEntry> &lexicon) {
+    std::ofstream lexiconFile("../data/lexicon.bin", std::ios::binary);
+    if (!lexiconFile.is_open()) {
+        logMessage("Error opening lexicon file for writing.");
+        return;
+    }
+
+    for (const auto &[term, entry] : lexicon) {
+        // Write term length and term
+        uint16_t termLength = static_cast<uint16_t>(term.length());
+        lexiconFile.write(reinterpret_cast<const char*>(&termLength), sizeof(termLength));
+        lexiconFile.write(term.c_str(), termLength);
+
+        // Write LexiconEntry data
+        lexiconFile.write(reinterpret_cast<const char*>(&entry.offset), sizeof(entry.offset));
+        lexiconFile.write(reinterpret_cast<const char*>(&entry.length), sizeof(entry.length));
+        lexiconFile.write(reinterpret_cast<const char*>(&entry.docFrequency), sizeof(entry.docFrequency));
+    }
+
+    lexiconFile.close();
+    logMessage("Lexicon written to file.");
 }
 
 int main() {
-    // Directory containing the intermediate files
-    std::string directory = "../data/intermediate/";
-    std::vector<std::string> inputFiles;
-
-    // Iterate over all files in the directory and select the ones that match our pattern (e.g., temp*.bin)
-    for (const auto &entry : fs::directory_iterator(directory)) {
-        std::string filename = entry.path().string();
-        if (filename.find("temp") != std::string::npos && filename.find(".bin") != std::string::npos) {
-            inputFiles.push_back(filename);
+    // Read the number of temp files generated
+    int numTempFiles = 0;
+    while (true) {
+        std::string tempFileName = "../data/intermediate/temp" + std::to_string(numTempFiles) + ".bin";
+        if (!fs::exists(tempFileName)) {
+            break;
         }
+        numTempFiles++;
     }
 
-    // Sort the inputFiles numerically based on the number part of the filename
-    std::sort(inputFiles.begin(), inputFiles.end(), [](const std::string &a, const std::string &b) {
-        return extractFileNumber(a) < extractFileNumber(b);
-    });
-
-    // Output file for the final compressed index
-    std::string outputFile = "../data/final_compressed_index.bin";
-
-    // Check if we found any input files
-    if (inputFiles.empty()) {
-        logMessage("No intermediate files found in the directory: " + directory);
-        return 1;  // Exit with an error code
+    if (numTempFiles == 0) {
+        std::cerr << "No temp files found for merging." << std::endl;
+        return 1;
     }
 
-    // Log the files to be merged
-    logMessage("Merging the following files:");
-    for (const auto &file : inputFiles) {
-        logMessage(" - " + file);
-    }
+    std::unordered_map<std::string, LexiconEntry> lexicon;
 
-    // Start the merge process (called only once)
-    logMessage("Starting merge process...");
-    mergeSortedFilesBatch(inputFiles, outputFile);
+    // Merge temp files to create the inverted index and lexicon
+    mergeTempFiles(numTempFiles, lexicon);
 
-    return 0;  // End of main function
+    // Write the lexicon to file
+    writeLexiconToFile(lexicon);
+
+    logMessage("Merging process completed.");
+
+    return 0;
 }
