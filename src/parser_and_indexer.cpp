@@ -18,7 +18,7 @@
     #include <sys/stat.h>  // For mkdir on Unix
 #endif
 
-#define MAX_RECORDS 1024  // Maximum number of term-docID pairs in memory
+#define MAX_RECORDS 1000  // Maximum number of term-docID pairs in memory
 
 // Log messages to a file (for debugging purposes)
 std::ofstream logFile("../logs/parser.log", std::ios::app);
