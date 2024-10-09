@@ -18,7 +18,7 @@
     #include <sys/stat.h>  // For mkdir on Unix
 #endif
 
-#define MAX_RECORDS 1000  // Maximum number of term-docID pairs in memory
+#define MAX_RECORDS 1000000  // Maximum number of term-docID pairs in memory
 
 // Log messages to a file (for debugging purposes)
 std::ofstream logFile("../logs/parser.log", std::ios::app);
@@ -31,7 +31,7 @@ void logMessage(const std::string &message) {
     logFile << std::asctime(std::localtime(&currentTime)) << message << std::endl;
 }
 
-// Helper function to create directories recursively
+// Helper function to create directories for data 
 void createDirectory(const std::string &dir) {
     struct stat info;
 
@@ -175,7 +175,7 @@ int main() {
     std::unordered_map<int, std::string> pageTable;
 
     // Generate term-docID pairs from the input collection
-    generateTermDocPairs("../data/collection_short.tsv", pageTable);
+    generateTermDocPairs("../data/collection.tsv", pageTable);
 
     // Write the page table to file
     writePageTableToFile(pageTable);

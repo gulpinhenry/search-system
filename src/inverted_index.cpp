@@ -4,20 +4,17 @@
 #include <iostream>
 #include <algorithm>
 
-// Constructor
 InvertedIndex::InvertedIndex(const std::string &indexFilename, const std::string &lexiconFilename)
     : currentPostingIndex(0), cacheSizeLimit(1000000), currentCacheSize(0) {
-    // Open the index file
+    // Open index ifle
     indexFile.open(indexFilename, std::ios::binary);
     if (!indexFile.is_open()) {
         std::cerr << "Error opening index file: " << indexFilename << std::endl;
     }
-
-    // Load the lexicon into memory
     loadLexicon(lexiconFilename);
 }
 
-// Load the lexicon from file
+// load lexicon into main memory
 void InvertedIndex::loadLexicon(const std::string &lexiconFilename) {
     std::ifstream lexiconFile(lexiconFilename, std::ios::binary);
     if (!lexiconFile.is_open()) {
@@ -34,7 +31,7 @@ void InvertedIndex::loadLexicon(const std::string &lexiconFilename) {
         std::string term(termLength, ' ');
         lexiconFile.read(&term[0], termLength);
 
-        // Read LexiconEntry data
+        // Read entry data
         LexiconEntry entry;
         lexiconFile.read(reinterpret_cast<char*>(&entry.offset), sizeof(entry.offset));
         lexiconFile.read(reinterpret_cast<char*>(&entry.length), sizeof(entry.length));

@@ -4,18 +4,20 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <cstdint>
 
-struct Posting {
+// Term-Document Pair structure to store
+struct TermDocPair {
+    std::string term;
     int docID;
-    int frequency;
 };
 
 // Function prototypes
+void createDirectory(const std::string &dir);
 std::vector<std::string> tokenize(const std::string &text);
-void processPassage(int docID, const std::string &passage, std::unordered_map<std::string, std::vector<Posting>> &index);
-void generateCompressedIndex(const std::string &inputFile);
-void writeCompressedBlock(std::ofstream &binFile, const std::vector<int> &docIDs, const std::vector<int> &frequencies,
-                          std::vector<int> &lastdocid, std::vector<int> &docidsize, std::vector<int> &freqsize);
-void writeMetadata(const std::vector<int> &lastdocid, const std::vector<int> &docidsize, const std::vector<int> &freqsize);
+void processPassage(int docID, const std::string &passage, std::vector<TermDocPair> &termDocPairs);
+void generateTermDocPairs(const std::string &inputFile, std::unordered_map<int, std::string> &pageTable);
+void saveTermDocPairsToFile(const std::vector<TermDocPair> &termDocPairs, int &fileCounter);
+void writePageTableToFile(const std::unordered_map<int, std::string> &pageTable);
 
-#endif
+#endif  // PARSER_AND_INDEXER_H
