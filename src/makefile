@@ -1,18 +1,30 @@
 CXX = g++
 CXXFLAGS = -Wall -std=c++17 -I../include
 
+build_and_run_all: all run_parser_and_indexer run_merger run_query_processor
+
 all: parser_and_indexer merger query_processor
 
-parser_and_indexer: parser_and_indexer.cpp compression.cpp
-	$(CXX) $(CXXFLAGS) -o ../build/parser_and_indexer parser_and_indexer.cpp compression.cpp
+
+parser_and_indexer_mt: parser_and_indexer_mt.cpp compression.cpp utils.cpp
+	$(CXX) $(CXXFLAGS) -o ../build/parser_and_indexer_mt parser_and_indexer_mt.cpp compression.cpp  utils.cpp thread_pool.cpp	
+
+parser_and_indexer: parser_and_indexer.cpp compression.cpp utils.cpp
+	$(CXX) $(CXXFLAGS) -o ../build/parser_and_indexer parser_and_indexer.cpp compression.cpp utils.cpp
+
+run_parser_and_indexer:
 	../build/parser_and_indexer
 
 merger: merger.cpp compression.cpp
 	$(CXX) $(CXXFLAGS) -o ../build/merger merger.cpp compression.cpp
+
+run_merger:
 	../build/merger
 
-query_processor: query_processor query_processor.cpp inverted_index.cpp compression.cpp
+query_processor: query_processor.cpp inverted_index.cpp compression.cpp
 	$(CXX) $(CXXFLAGS) -o ../build/query_processor query_processor.cpp inverted_index.cpp compression.cpp 
+
+run_query_processor:
 	../build/query_processor
 
 test_parse: test_bin_reader.cpp
