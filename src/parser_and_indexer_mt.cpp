@@ -27,24 +27,40 @@ void logMessage(const std::string &message)
     std::time_t currentTime = std::time(nullptr);
     logFile << std::asctime(std::localtime(&currentTime)) << message << std::endl;
 }
-void processPassageMT(int docID, const std::string &passage, std::vector<TermDocPair> &termDocPairs, std::mutex &termDocPairsMutex, int &fileCounter)
+void processPassageMT(int docID, const std::string &passage, std::vector<TermDocPair> &termDocPairs, std::mutex &termDocPairsMutex, std::atomic<int> &fileCounter)
 {
     logMessage("Processing passage for docID: " + std::to_string(docID));
     auto terms = tokenize(passage);
 
-    std::unique_lock<std::mutex> termDocPairsLock(termDocPairsMutex);
-    // For each term, generate a TermDocPair
-    for (const auto &term : terms)
+    // Reserve space to avoid frequent reallocations
     {
-        termDocPairs.push_back({term, docID});
+        std::unique_lock<std::mutex> lock(termDocPairsMutex);
+        if (termDocPairs.capacity() < MAX_RECORDS) {
+            termDocPairs.reserve(MAX_RECORDS);
+        }
     }
-    if (termDocPairs.size() >= MAX_RECORDS)
-    {
-        std::vector<TermDocPair> termDocPairsCopy(termDocPairs);
-        termDocPairs.clear(); // Clear buffer after saving
-        int curFileCounter = fileCounter++;
+
+    // Lock the mutex while modifying termDocPairs
+    std::unique_lock<std::mutex> termDocPairsLock(termDocPairsMutex);
+
+    // Add terms to termDocPairs
+    for (const auto &term : terms) {
+        termDocPairs.emplace_back(term, docID);
+    }
+
+    // If the vector reaches the max size, move its contents to a local copy
+    if (termDocPairs.size() >= MAX_RECORDS) {
+        std::vector<TermDocPair> termDocPairsCopy(std::move(termDocPairs));
+        termDocPairs.clear();  // Clear the original vector for reuse
+
+        // Unlock the mutex early since we're done with the shared data
         termDocPairsLock.unlock();
-        std::cout << "writing to file with fileCounter" << curFileCounter << std::endl;
+
+        // Increment the file counter atomically
+        int curFileCounter = fileCounter.fetch_add(1);
+
+        // Save the copied data to a file asynchronously
+        std::cout << "Writing to file with fileCounter: " << curFileCounter << std::endl;
         saveTermDocPairsToFile(termDocPairsCopy, curFileCounter);
     }
 }
@@ -62,7 +78,8 @@ void generateTermDocPairsMT(const std::string &inputFile, std::unordered_map<int
     std::vector<TermDocPair> termDocPairs;
     std::string line;
     std::atomic<int> docID(0);
-    int fileCounter = 0;
+    std::atomic<int> fileCounter{0};
+
 
     while (std::getline(inputFileStream, line))
     {

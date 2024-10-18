@@ -11,7 +11,26 @@
 struct TermDocPair {
     std::string term;
     int docID;
+
+    // Constructor
+    TermDocPair(const std::string& t, int d) : term(t), docID(d) {}
+
+    // Default constructor (needed by std::vector)
+    TermDocPair() = default;
+
+    // Copy constructor
+    TermDocPair(const TermDocPair& other) = default;
+
+    // Copy assignment operator
+    TermDocPair& operator=(const TermDocPair& other) = default;
+
+    // Move constructor
+    TermDocPair(TermDocPair&& other) noexcept = default;
+
+    // Move assignment operator
+    TermDocPair& operator=(TermDocPair&& other) noexcept = default;
 };
+
 
 // Helper function to create directories for data 
 void createDirectory(const std::string &dir);

@@ -92,7 +92,7 @@ int main() {
     std::unordered_map<int, std::string> pageTable;
 
     // Generate term-docID pairs from the input collection
-    generateTermDocPairs("../data/collection.tsv", pageTable);
+    generateTermDocPairs("../data/collection_short.tsv", pageTable);
 
     // Write the page table to file
     writePageTableToFile(pageTable);

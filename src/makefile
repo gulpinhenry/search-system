@@ -7,13 +7,15 @@ all: parser_and_indexer merger query_processor
 
 
 parser_and_indexer_mt: parser_and_indexer_mt.cpp compression.cpp utils.cpp
-	$(CXX) $(CXXFLAGS) -o ../build/parser_and_indexer_mt parser_and_indexer_mt.cpp compression.cpp  utils.cpp thread_pool.cpp	
+	$(CXX) $(CXXFLAGS) -g -o ../build/parser_and_indexer_mt parser_and_indexer_mt.cpp compression.cpp  utils.cpp thread_pool.cpp -lpthread
+	../build/parser_and_indexer_mt	
 
-parser_and_indexer: parser_and_indexer.cpp compression.cpp utils.cpp
-	$(CXX) $(CXXFLAGS) -o ../build/parser_and_indexer parser_and_indexer.cpp compression.cpp utils.cpp
+# parser_and_indexer: parser_and_indexer.cpp compression.cpp utils.cpp
+# 	$(CXX) $(CXXFLAGS) -o ../build/parser_and_indexer parser_and_indexer.cpp compression.cpp utils.cpp
+# 	../build/parser_and_indexer
 
-run_parser_and_indexer:
-	../build/parser_and_indexer
+# run_parser_and_indexer:
+# 	../build/parser_and_indexer
 
 merger: merger.cpp compression.cpp
 	$(CXX) $(CXXFLAGS) -o ../build/merger merger.cpp compression.cpp
