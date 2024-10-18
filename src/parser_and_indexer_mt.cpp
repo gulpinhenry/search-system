@@ -32,7 +32,7 @@ void processPassageMT(int docID, const std::string &passage, std::vector<TermDoc
     logMessage("Processing passage for docID: " + std::to_string(docID));
     auto terms = tokenize(passage);
 
-    std::lock_guard<std::mutex> termDocPairsLock(termDocPairsMutex);
+    std::unique_lock<std::mutex> termDocPairsLock(termDocPairsMutex);
     // For each term, generate a TermDocPair
     for (const auto &term : terms)
     {
@@ -40,8 +40,12 @@ void processPassageMT(int docID, const std::string &passage, std::vector<TermDoc
     }
     if (termDocPairs.size() >= MAX_RECORDS)
     {
-        saveTermDocPairsToFile(termDocPairs, fileCounter++);
+        std::vector<TermDocPair> termDocPairsCopy(termDocPairs);
         termDocPairs.clear(); // Clear buffer after saving
+        int curFileCounter = fileCounter++;
+        termDocPairsLock.unlock();
+        std::cout << "writing to file with fileCounter" << curFileCounter << std::endl;
+        saveTermDocPairsToFile(termDocPairsCopy, curFileCounter++);
     }
 }
 
@@ -62,30 +66,31 @@ void generateTermDocPairsMT(const std::string &inputFile, std::unordered_map<int
 
     while (std::getline(inputFileStream, line))
     {
-        if (threadPool)
+        auto task = [line, &pageTableMutex, &pageTable, &docID, &termDocPairs, &termDocPairsMutex, &fileCounter]()
         {
-            auto task = [line, &pageTableMutex, &pageTable, &docID, &termDocPairs, &termDocPairsMutex, &fileCounter]()
-            {
                 size_t tabPos = line.find('\t');
                 if (tabPos != std::string::npos)
                 {
                     std::string docName = line.substr(0, tabPos);
                     std::string passage = line.substr(tabPos + 1);
+                    int _docId = docID++;
 
                     {
                         std::lock_guard<std::mutex> pageTableLock(pageTableMutex);
                         // Store in page table
-                        pageTable[docID] = docName;
+                        pageTable[_docId] = docName;
                     }
 
-                    processPassageMT(docID++, passage, termDocPairs, termDocPairsMutex, fileCounter);
+                    processPassageMT(_docId, passage, termDocPairs, termDocPairsMutex, fileCounter);
                 } };
+        if (threadPool)
+        {
             threadPool->enqueue(task);
         }
         else
         {
-            logMessage("ThreadPool is not defined. Try single thread one?");
-            exit(-1);
+            logMessage("ThreadPool is not defined. Trying single thread one");
+            task();
         }
     }
 }
@@ -106,20 +111,22 @@ int main(int argc, char *argv[])
     {
         threadNum = 8;
     }
-    ThreadPool pool(threadNum);
+    {
+        ThreadPool pool(threadNum);
 
-    createDirectory("../data");
-    createDirectory("../data/intermediate");
+        createDirectory("../data");
+        createDirectory("../data/intermediate");
 
-    // Data structures for the page table
-    std::unordered_map<int, std::string> pageTable;
+        // Data structures for the page table
+        std::unordered_map<int, std::string> pageTable;
 
-    generateTermDocPairsMT("../data/collection.tsv", pageTable, &pool);
+        generateTermDocPairsMT("../data/collection.tsv", pageTable, &pool);
 
-    // Write the page table to file
-    writePageTableToFile(pageTable);
+        // Write the page table to file
+        writePageTableToFile(pageTable);
 
-    logMessage("Parsing process with multi-threading completed.");
+        logMessage("Parsing process with multi-threading completed.");
+    }
     auto endTime = std::chrono::high_resolution_clock::now();
 
     std::cout << "time passed: " << std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() << std::endl;

@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -Wall -std=c++17 -I../include
+CXXFLAGS = -Wall -std=c++17 -I../include -g
 
 build_and_run_all: all run_parser_and_indexer run_merger run_query_processor
 

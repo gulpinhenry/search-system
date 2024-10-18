@@ -10,7 +10,7 @@
 
 class ThreadPool {
 public:
-    explicit ThreadPool(size_t threads);
+    explicit ThreadPool(size_t threads = 8, size_t maxThreadsInQueue = 32);
     ~ThreadPool();
 
     void enqueue(std::function<void()> f);
@@ -20,8 +20,10 @@ private:
     std::queue<std::function<void()>> tasks;
 
     std::mutex queueMutex;
-    std::condition_variable condition;
-    bool stop;
+    std::condition_variable taskAvailable, spaceAvailable;
+    bool stop = false;
+
+    size_t maxThreadsInQueue;
 
     void worker();
 };
