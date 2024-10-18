@@ -45,7 +45,7 @@ void processPassageMT(int docID, const std::string &passage, std::vector<TermDoc
         int curFileCounter = fileCounter++;
         termDocPairsLock.unlock();
         std::cout << "writing to file with fileCounter" << curFileCounter << std::endl;
-        saveTermDocPairsToFile(termDocPairsCopy, curFileCounter++);
+        saveTermDocPairsToFile(termDocPairsCopy, curFileCounter);
     }
 }
 
@@ -93,6 +93,19 @@ void generateTermDocPairsMT(const std::string &inputFile, std::unordered_map<int
             task();
         }
     }
+    delete threadPool;
+    auto task = [&termDocPairs, &termDocPairsMutex, &fileCounter]()
+    {
+        std::lock_guard<std::mutex> termDocPairsLock(termDocPairsMutex);
+        if (termDocPairs.size() > 0)
+        {
+            std::cout << "Write remain TermDocPairs to temp." << std::endl;
+            saveTermDocPairsToFile(termDocPairs, fileCounter++);
+        }
+        else
+            std::cout << "TermDocPairs size zero! No need to create new" << std::endl;
+    };
+    task();
 }
 #include <chrono>
 
@@ -106,13 +119,23 @@ int main(int argc, char *argv[])
     {
         threadNum = std::atoi(argv[1]); // Convert argument to integer
     }
+    int maxWorks = 16;
+    if (argc > 2)
+    {
+        maxWorks = std::atoi(argv[2]); // Convert argument to integer
+    }
 
     if (threadNum <= 0)
     {
         threadNum = 8;
     }
+
+    if (maxWorks <= 0)
     {
-        ThreadPool pool(threadNum);
+        maxWorks = 16;
+    }
+    {
+        ThreadPool *pool = new ThreadPool(threadNum, maxWorks);
 
         createDirectory("../data");
         createDirectory("../data/intermediate");
@@ -120,7 +143,7 @@ int main(int argc, char *argv[])
         // Data structures for the page table
         std::unordered_map<int, std::string> pageTable;
 
-        generateTermDocPairsMT("../data/collection.tsv", pageTable, &pool);
+        generateTermDocPairsMT("../data/collection.tsv", pageTable, pool);
 
         // Write the page table to file
         writePageTableToFile(pageTable);
