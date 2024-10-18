@@ -6,7 +6,7 @@
 
 InvertedIndex::InvertedIndex(const std::string &indexFilename, const std::string &lexiconFilename)
     : currentPostingIndex(0), cacheSizeLimit(1000000), currentCacheSize(0) {
-    // Open index ifle
+    // Open index file
     indexFile.open(indexFilename, std::ios::binary);
     if (!indexFile.is_open()) {
         std::cerr << "Error opening index file: " << indexFilename << std::endl;
@@ -14,7 +14,7 @@ InvertedIndex::InvertedIndex(const std::string &indexFilename, const std::string
     loadLexicon(lexiconFilename);
 }
 
-// load lexicon into main memory
+// Load lexicon into main memory
 void InvertedIndex::loadLexicon(const std::string &lexiconFilename) {
     std::ifstream lexiconFile(lexiconFilename, std::ios::binary);
     if (!lexiconFile.is_open()) {
@@ -36,6 +36,7 @@ void InvertedIndex::loadLexicon(const std::string &lexiconFilename) {
         lexiconFile.read(reinterpret_cast<char*>(&entry.offset), sizeof(entry.offset));
         lexiconFile.read(reinterpret_cast<char*>(&entry.length), sizeof(entry.length));
         lexiconFile.read(reinterpret_cast<char*>(&entry.docFrequency), sizeof(entry.docFrequency));
+        lexiconFile.read(reinterpret_cast<char*>(&entry.docIDsLength), sizeof(entry.docIDsLength));
 
         lexicon[term] = entry;
     }
@@ -66,21 +67,34 @@ bool InvertedIndex::openList(const std::string &term) {
     LexiconEntry entry = it->second;
     indexFile.seekg(entry.offset, std::ios::beg);
 
-    std::vector<unsigned char> compressedData(entry.length);
-    indexFile.read(reinterpret_cast<char*>(compressedData.data()), entry.length);
+    // Read compressed docIDs
+    std::vector<unsigned char> compressedDocIDs(entry.docIDsLength);
+    indexFile.read(reinterpret_cast<char*>(compressedDocIDs.data()), entry.docIDsLength);
 
-    // Decompress the postings
-    std::vector<int> gaps = varbyteDecodeList(compressedData);
-    std::vector<int> docIDs(gaps.size());
-    docIDs[0] = gaps[0];
-    for (size_t i = 1; i < gaps.size(); ++i) {
-        docIDs[i] = docIDs[i - 1] + gaps[i];
+    // Read compressed BM25 scores
+    size_t bm25Length = entry.length - entry.docIDsLength;
+    std::vector<unsigned char> compressedBM25(bm25Length);
+    indexFile.read(reinterpret_cast<char*>(compressedBM25.data()), bm25Length);
+
+    // Decompress docIDs
+    std::vector<int> docIDGaps = varbyteDecodeList(compressedDocIDs);
+    std::vector<int> docIDs(docIDGaps.size());
+    docIDs[0] = docIDGaps[0];
+    for (size_t i = 1; i < docIDGaps.size(); ++i) {
+        docIDs[i] = docIDs[i - 1] + docIDGaps[i];
     }
 
-    // Frequencies are assumed to be 1 since we didn't store them; adjust as needed
+    // Decompress BM25 scores
+    std::vector<int> bm25Quantized = varbyteDecodeList(compressedBM25);
+    std::vector<double> bm25Scores(bm25Quantized.size());
+    for (size_t i = 0; i < bm25Quantized.size(); ++i) {
+        bm25Scores[i] = static_cast<double>(bm25Quantized[i]) / 1000.0;  // De-quantize
+    }
+
+    // Populate currentPostings
     currentPostings.resize(docIDs.size());
     for (size_t i = 0; i < docIDs.size(); ++i) {
-        currentPostings[i] = { docIDs[i], 1 };  // Frequency is 1
+        currentPostings[i] = { docIDs[i], bm25Scores[i] };
     }
 
     // Load into cache if cache size allows

@@ -19,9 +19,10 @@ parser_and_indexer_mt: parser_and_indexer_mt.cpp compression.cpp utils.cpp
 
 merger: merger.cpp compression.cpp
 	$(CXX) $(CXXFLAGS) -o ../build/merger merger.cpp compression.cpp
-
-run_merger:
 	../build/merger
+
+# run_merger:
+# 	../build/merger
 
 query_processor: query_processor.cpp inverted_index.cpp compression.cpp
 	$(CXX) $(CXXFLAGS) -o ../build/query_processor query_processor.cpp inverted_index.cpp compression.cpp 

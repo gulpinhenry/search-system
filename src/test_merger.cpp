@@ -1,11 +1,18 @@
 #include "compression.h"
-#include "merger.h"  // Include to access LexiconEntry
 #include <iostream>
 #include <fstream>
 #include <vector>
 #include <string>
 #include <unordered_map>
 #include <cstdint>
+
+// Updated LexiconEntry struct to include docIDsLength
+struct LexiconEntry {
+    int64_t offset;
+    int32_t length;          // Total length of postings list in bytes
+    int32_t docFrequency;    // Number of documents
+    int32_t docIDsLength;    // Length of compressed docIDs in bytes
+};
 
 // Function to read and print the lexicon file
 void readAndPrintLexicon(const std::string &filename) {
@@ -26,17 +33,16 @@ void readAndPrintLexicon(const std::string &filename) {
         lexiconFile.read(&term[0], termLength);
 
         // Read LexiconEntry data
-        int64_t offset;
-        int length;
-        int docFrequency;
-
-        lexiconFile.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-        lexiconFile.read(reinterpret_cast<char*>(&length), sizeof(length));
-        lexiconFile.read(reinterpret_cast<char*>(&docFrequency), sizeof(docFrequency));
+        LexiconEntry entry;
+        lexiconFile.read(reinterpret_cast<char*>(&entry.offset), sizeof(entry.offset));
+        lexiconFile.read(reinterpret_cast<char*>(&entry.length), sizeof(entry.length));
+        lexiconFile.read(reinterpret_cast<char*>(&entry.docFrequency), sizeof(entry.docFrequency));
+        lexiconFile.read(reinterpret_cast<char*>(&entry.docIDsLength), sizeof(entry.docIDsLength));
 
         // Print the lexicon entry
-        std::cout << "Term: " << term << ", Offset: " << offset
-                  << ", Length: " << length << ", DocFrequency: " << docFrequency << std::endl;
+        std::cout << "Term: " << term << ", Offset: " << entry.offset
+                  << ", Length: " << entry.length << ", DocFrequency: " << entry.docFrequency
+                  << ", DocIDsLength: " << entry.docIDsLength << std::endl;
     }
 
     lexiconFile.close();
@@ -67,31 +73,46 @@ void readAndPrintInvertedIndex(const std::string &indexFilename, const std::stri
         lexiconFile.read(&term[0], termLength);
 
         // Read LexiconEntry data
-        int64_t offset;
-        int length;
-        int docFrequency;
-
-        lexiconFile.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-        lexiconFile.read(reinterpret_cast<char*>(&length), sizeof(length));
-        lexiconFile.read(reinterpret_cast<char*>(&docFrequency), sizeof(docFrequency));
+        LexiconEntry entry;
+        lexiconFile.read(reinterpret_cast<char*>(&entry.offset), sizeof(entry.offset));
+        lexiconFile.read(reinterpret_cast<char*>(&entry.length), sizeof(entry.length));
+        lexiconFile.read(reinterpret_cast<char*>(&entry.docFrequency), sizeof(entry.docFrequency));
+        lexiconFile.read(reinterpret_cast<char*>(&entry.docIDsLength), sizeof(entry.docIDsLength));
 
         // Read postings list from index file
-        indexFile.seekg(offset, std::ios::beg);
-        std::vector<unsigned char> compressedData(length);
-        indexFile.read(reinterpret_cast<char*>(compressedData.data()), length);
+        indexFile.seekg(entry.offset, std::ios::beg);
+        std::vector<unsigned char> compressedData(entry.length);
+        indexFile.read(reinterpret_cast<char*>(compressedData.data()), entry.length);
 
-        // Decode postings
-        std::vector<int> gaps = varbyteDecodeList(compressedData);
+        // Split compressed data into docIDs and BM25 scores
+        std::vector<unsigned char> compressedDocIDs(
+            compressedData.begin(),
+            compressedData.begin() + entry.docIDsLength
+        );
+        std::vector<unsigned char> compressedBM25Scores(
+            compressedData.begin() + entry.docIDsLength,
+            compressedData.end()
+        );
+
+        // Decode docIDs
+        std::vector<int> gaps = varbyteDecodeList(compressedDocIDs);
         std::vector<int> docIDs(gaps.size());
         docIDs[0] = gaps[0];
         for (size_t i = 1; i < gaps.size(); ++i) {
             docIDs[i] = docIDs[i - 1] + gaps[i];
         }
 
+        // Decode BM25 scores
+        std::vector<int> bm25ScoresQuantized = varbyteDecodeList(compressedBM25Scores);
+        std::vector<double> bm25Scores(bm25ScoresQuantized.size());
+        for (size_t i = 0; i < bm25ScoresQuantized.size(); ++i) {
+            bm25Scores[i] = static_cast<double>(bm25ScoresQuantized[i]) / 1000.0;  // De-quantize
+        }
+
         // Print postings list
         std::cout << "Term: " << term << ", Postings: ";
-        for (const auto &docID : docIDs) {
-            std::cout << docID << " ";
+        for (size_t i = 0; i < docIDs.size(); ++i) {
+            std::cout << "(DocID: " << docIDs[i] << ", BM25: " << bm25Scores[i] << ") ";
         }
         std::cout << std::endl;
     }

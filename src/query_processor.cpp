@@ -4,26 +4,20 @@
 #include <sstream>
 #include <algorithm>
 #include <cmath>
-
-// Constants for BM25
-const double k1 = 1.2;
-const double b = 0.75;
+#include <queue>
+#include <tuple>
+#include <unordered_map>
 
 // Constructor
 QueryProcessor::QueryProcessor(const std::string &indexFilename, const std::string &lexiconFilename, const std::string &pageTableFilename)
-    : invertedIndex(indexFilename, lexiconFilename), totalDocs(0), avgDocLength(0.0) {
+    : invertedIndex(indexFilename, lexiconFilename) {
     // Load the page table
     loadPageTable(pageTableFilename);
 
-    // Calculate total number of documents and average document length
+    // Total number of documents
     totalDocs = pageTable.size();
-    int totalLength = 0;
-    for (const auto &[docID, docName] : pageTable) {
-        // Assuming document length is 100 for simplicity; adjust as needed
-        docLengths[docID] = 100;
-        totalLength += 100;
-    }
-    avgDocLength = static_cast<double>(totalLength) / totalDocs;
+
+    // Load document lengths if necessary (not needed if BM25 scores are precomputed)
 }
 
 // Parse the query into terms
@@ -41,23 +35,6 @@ std::vector<std::string> QueryProcessor::parseQuery(const std::string &query) {
     }
     return terms;
 }
-
-// Compute BM25 score for a document
-double QueryProcessor::computeBM25(int docID, const std::vector<std::string> &terms, const std::unordered_map<std::string, int> &termFrequencies) {
-    double score = 0.0;
-    int docLength = docLengths[docID];
-    for (const auto &term : terms) {
-        int df = invertedIndex.getDocFrequency(term);
-        int tf = termFrequencies.at(term);
-
-        double idf = log((totalDocs - df + 0.5) / (df + 0.5) + 1);
-        double numerator = tf * (k1 + 1);
-        double denominator = tf + k1 * (1 - b + b * docLength / avgDocLength);
-        score += idf * (numerator / denominator);
-    }
-    return score;
-}
-
 
 // Load the page table from file
 void QueryProcessor::loadPageTable(const std::string &pageTableFilename) {
@@ -117,8 +94,8 @@ void QueryProcessor::processQuery(const std::string &query, bool conjunctive) {
         return;
     }
 
-    // Adjusted code to collect term frequencies per document
-    std::unordered_map<int, std::unordered_map<std::string, int>> docTermFreqs;  // docID -> {term -> frequency}
+    // DAAT Processing
+    std::unordered_map<int, double> docScores;  // docID -> aggregated score
 
     if (conjunctive) {
         // Conjunctive query: intersect the postings
@@ -129,7 +106,7 @@ void QueryProcessor::processQuery(const std::string &query, bool conjunctive) {
             int currentDocID = -1;
             bool allMatch = true;
 
-            // Find the maximum docID among current postings
+            // Find the docID with the smallest value among current postings
             for (size_t i = 0; i < numTerms; ++i) {
                 if (indices[i] >= termPostings[i].size()) {
                     allMatch = false;
@@ -158,10 +135,12 @@ void QueryProcessor::processQuery(const std::string &query, bool conjunctive) {
 
             if (allMatch) {
                 // All terms have this docID
+                double totalScore = 0.0;
                 for (size_t i = 0; i < numTerms; ++i) {
-                    docTermFreqs[currentDocID][validTerms[i]] = termPostings[i][indices[i]].frequency;
+                    totalScore += termPostings[i][indices[i]].bm25Score;
                     indices[i]++;
                 }
+                docScores[currentDocID] = totalScore;
             } else {
                 // Increment indices where docID is less than currentDocID
                 for (size_t i = 0; i < numTerms; ++i) {
@@ -173,21 +152,39 @@ void QueryProcessor::processQuery(const std::string &query, bool conjunctive) {
         }
     } else {
         // Disjunctive query: union of postings
-        for (size_t termIdx = 0; termIdx < termPostings.size(); ++termIdx) {
-            const auto &postings = termPostings[termIdx];
-            const auto &term = validTerms[termIdx];
-            for (const auto &posting : postings) {
-                docTermFreqs[posting.docID][term] = posting.frequency;
+        // Use a min-heap to merge postings
+        auto cmp = [](const std::tuple<int, size_t, size_t> &a, const std::tuple<int, size_t, size_t> &b) {
+            return std::get<0>(a) > std::get<0>(b);  // Compare docIDs
+        };
+        std::priority_queue<
+            std::tuple<int, size_t, size_t>,
+            std::vector<std::tuple<int, size_t, size_t>>,
+            decltype(cmp)
+        > pq(cmp);
+
+        // Initialize heap with the first posting from each term
+        for (size_t i = 0; i < termPostings.size(); ++i) {
+            if (!termPostings[i].empty()) {
+                pq.emplace(termPostings[i][0].docID, i, 0);  // (docID, termIndex, postingIndex)
+            }
+        }
+
+        while (!pq.empty()) {
+            auto [docID, termIdx, postingIdx] = pq.top();
+            pq.pop();
+
+            double score = termPostings[termIdx][postingIdx].bm25Score;
+            docScores[docID] += score;
+
+            // Move to next posting in the same term
+            if (postingIdx + 1 < termPostings[termIdx].size()) {
+                pq.emplace(termPostings[termIdx][postingIdx + 1].docID, termIdx, postingIdx + 1);
             }
         }
     }
 
-    // Rank documents using BM25
-    std::vector<std::pair<int, double>> rankedDocs;
-    for (const auto &[docID, termFreqs] : docTermFreqs) {
-        double score = computeBM25(docID, validTerms, termFreqs);
-        rankedDocs.emplace_back(docID, score);
-    }
+    // Rank documents by aggregated score
+    std::vector<std::pair<int, double>> rankedDocs(docScores.begin(), docScores.end());
 
     // Sort by score in descending order
     std::sort(rankedDocs.begin(), rankedDocs.end(), [](const auto &a, const auto &b) {
@@ -203,6 +200,7 @@ void QueryProcessor::processQuery(const std::string &query, bool conjunctive) {
         std::cout << i + 1 << ". DocID: " << docID << ", DocName: " << docName << ", Score: " << score << std::endl;
     }
 }
+
 int main() {
     QueryProcessor qp("../data/index.bin", "../data/lexicon.bin", "../data/page_table.bin");
 
