@@ -1,3 +1,4 @@
+// merger.cpp
 #include "merger.h"
 #include "compression.h"
 #include <iostream>
@@ -11,14 +12,12 @@
 #include <functional>
 #include <filesystem>
 #include <ctime>
-#include <cmath>  // For BM25 computations
 #include <algorithm> // For std::sort
 
 namespace fs = std::filesystem;
 
-// Constants for BM25
-const double k1 = 1.5;
-const double b = 0.75;
+// Block size (number of postings per block)
+const int BLOCK_SIZE = 128;
 
 // Log messages to a file (for debugging purposes)
 std::ofstream logFile("../logs/merge.log", std::ios::app);
@@ -32,8 +31,7 @@ void logMessage(const std::string &message) {
     logFile << std::asctime(std::localtime(&currentTime)) << message << std::endl;
 }
 
-
-void mergeTempFiles(int numFiles, std::unordered_map<std::string, LexiconEntry> &lexicon, int totalDocuments, double avgDocLength) {
+void mergeTempFiles(int numFiles, std::unordered_map<std::string, LexiconEntry> &lexicon) {
     // Open all temp files
     std::vector<std::ifstream> tempFiles(numFiles);
     for (int i = 0; i < numFiles; ++i) {
@@ -52,15 +50,15 @@ void mergeTempFiles(int numFiles, std::unordered_map<std::string, LexiconEntry> 
     }
 
     // Priority queue for merging
-    auto cmp = [](const std::tuple<std::string, int, int, int, int> &a, const std::tuple<std::string, int, int, int, int> &b) {
+    auto cmp = [](const std::tuple<std::string, int, int> &a, const std::tuple<std::string, int, int> &b) {
         if (std::get<0>(a) == std::get<0>(b)) {
             return std::get<1>(a) > std::get<1>(b);  // Compare docIDs
         }
         return std::get<0>(a) > std::get<0>(b);  // Compare terms
     };
     std::priority_queue<
-        std::tuple<std::string, int, int, int, int>,
-        std::vector<std::tuple<std::string, int, int, int, int>>,
+        std::tuple<std::string, int, int>,
+        std::vector<std::tuple<std::string, int, int>>,
         decltype(cmp)
     > pq(cmp);
 
@@ -69,25 +67,26 @@ void mergeTempFiles(int numFiles, std::unordered_map<std::string, LexiconEntry> 
         if (tempFiles[i].peek() != EOF) {
             uint16_t termLength;
             tempFiles[i].read(reinterpret_cast<char*>(&termLength), sizeof(termLength));
-            std::string term(termLength, ' ');
-            tempFiles[i].read(&term[0], termLength);
+            if (!tempFiles[i]) continue; // Error or EOF
+            std::vector<char> termBuffer(termLength);
+            tempFiles[i].read(termBuffer.data(), termLength);
+            if (!tempFiles[i]) continue; // Error or EOF
+            std::string term(termBuffer.begin(), termBuffer.end());
+
             int docID;
             tempFiles[i].read(reinterpret_cast<char*>(&docID), sizeof(docID));
-            int tf;
-            tempFiles[i].read(reinterpret_cast<char*>(&tf), sizeof(tf));
-            int docLength;
-            tempFiles[i].read(reinterpret_cast<char*>(&docLength), sizeof(docLength));
+            if (!tempFiles[i]) continue; // Error or EOF
 
-            pq.push(std::make_tuple(term, docID, tf, docLength, i));
+            pq.push(std::make_tuple(term, docID, i));
         }
     }
 
     std::string currentTerm;
-    std::vector<std::tuple<int, int, int>> postingsList;  // Stores (docID, tf, docLength)
+    std::vector<int> postingsList;  // Stores docIDs
     int64_t offset = 0;
 
     while (!pq.empty()) {
-        auto [term, docID, tf, docLength, fileIndex] = pq.top();
+        auto [term, docID, fileIndex] = pq.top();
         pq.pop();
 
         if (currentTerm.empty()) {
@@ -98,46 +97,32 @@ void mergeTempFiles(int numFiles, std::unordered_map<std::string, LexiconEntry> 
             // Process postingsList for currentTerm
             int df = postingsList.size();
 
-            // Compute BM25 scores
-            std::vector<std::tuple<int, double>> postingsWithBM25;  // (docID, BM25 score)
-            for (const auto& [docID, tf, docLength] : postingsList) {
-                double idf = std::log((totalDocuments - df + 0.5) / (df + 0.5));
-                double K = k1 * ((1 - b) + b * (docLength / avgDocLength));
-                double bm25Score = idf * ((k1 + 1) * tf) / (K + tf);
-                postingsWithBM25.emplace_back(docID, bm25Score);
-            }
-
             // Sort postings by docID to ensure order
-            std::sort(postingsWithBM25.begin(), postingsWithBM25.end());
+            std::sort(postingsList.begin(), postingsList.end());
 
-            // Prepare data for compression
-            std::vector<int> docIDGaps(postingsWithBM25.size());
-            std::vector<int> bm25ScoresQuantized(postingsWithBM25.size());
-
-            // Compute gaps and quantize BM25 scores
-            docIDGaps[0] = std::get<0>(postingsWithBM25[0]);
-            bm25ScoresQuantized[0] = static_cast<int>(std::get<1>(postingsWithBM25[0]) * 1000);  // Quantize BM25 score
-            for (size_t i = 1; i < postingsWithBM25.size(); ++i) {
-                docIDGaps[i] = std::get<0>(postingsWithBM25[i]) - std::get<0>(postingsWithBM25[i - 1]);
-                bm25ScoresQuantized[i] = static_cast<int>(std::get<1>(postingsWithBM25[i]) * 1000);
+            // Compute docID gaps
+            std::vector<int> docIDGaps(postingsList.size());
+            int lastDocID = 0;
+            for (size_t i = 0; i < postingsList.size(); ++i) {
+                docIDGaps[i] = postingsList[i] - lastDocID;
+                lastDocID = postingsList[i];
             }
 
-            // Compress docID gaps and BM25 scores
+            // Compress docID gaps
             std::vector<unsigned char> compressedDocIDs = varbyteEncodeList(docIDGaps);
-            std::vector<unsigned char> compressedBM25Scores = varbyteEncodeList(bm25ScoresQuantized);
-
-            LexiconEntry entry;
-            entry.offset = offset;
-            entry.docFrequency = df;
-            entry.docIDsLength = compressedDocIDs.size();
-            entry.length = compressedDocIDs.size() + compressedBM25Scores.size();
 
             // Write to index file
+            int64_t offsetBefore = offset;
             indexFile.write(reinterpret_cast<char*>(compressedDocIDs.data()), compressedDocIDs.size());
-            indexFile.write(reinterpret_cast<char*>(compressedBM25Scores.data()), compressedBM25Scores.size());
-            offset += entry.length;
+            offset += compressedDocIDs.size();
 
             // Update lexicon
+            LexiconEntry entry;
+            entry.offset = offsetBefore;
+            entry.length = compressedDocIDs.size();
+            entry.docFrequency = df;
+            entry.blockCount = 0; // Not using blocking in this version
+
             lexicon[currentTerm] = entry;
 
             // Reset for new term
@@ -146,22 +131,23 @@ void mergeTempFiles(int numFiles, std::unordered_map<std::string, LexiconEntry> 
         }
 
         // Add current posting to postingsList
-        postingsList.emplace_back(docID, tf, docLength);
+        postingsList.push_back(docID);
 
-        // Read next term-docID-tf-dl tuple from the same temp file
+        // Read next term-docID tuple from the same temp file
         if (tempFiles[fileIndex].peek() != EOF) {
             uint16_t termLength;
             tempFiles[fileIndex].read(reinterpret_cast<char*>(&termLength), sizeof(termLength));
-            std::string nextTerm(termLength, ' ');
-            tempFiles[fileIndex].read(&nextTerm[0], termLength);
+            if (!tempFiles[fileIndex]) continue; // Error or EOF
+            std::vector<char> termBuffer(termLength);
+            tempFiles[fileIndex].read(termBuffer.data(), termLength);
+            if (!tempFiles[fileIndex]) continue; // Error or EOF
+            std::string nextTerm(termBuffer.begin(), termBuffer.end());
+
             int nextDocID;
             tempFiles[fileIndex].read(reinterpret_cast<char*>(&nextDocID), sizeof(nextDocID));
-            int nextTf;
-            tempFiles[fileIndex].read(reinterpret_cast<char*>(&nextTf), sizeof(nextTf));
-            int nextDocLength;
-            tempFiles[fileIndex].read(reinterpret_cast<char*>(&nextDocLength), sizeof(nextDocLength));
+            if (!tempFiles[fileIndex]) continue; // Error or EOF
 
-            pq.push(std::make_tuple(nextTerm, nextDocID, nextTf, nextDocLength, fileIndex));
+            pq.push(std::make_tuple(nextTerm, nextDocID, fileIndex));
         }
     }
 
@@ -169,46 +155,32 @@ void mergeTempFiles(int numFiles, std::unordered_map<std::string, LexiconEntry> 
     if (!postingsList.empty()) {
         int df = postingsList.size();
 
-        // Compute BM25 scores
-        std::vector<std::tuple<int, double>> postingsWithBM25;  // (docID, BM25 score)
-        for (const auto& [docID, tf, docLength] : postingsList) {
-            double idf = std::log((totalDocuments - df + 0.5) / (df + 0.5));
-            double K = k1 * ((1 - b) + b * (docLength / avgDocLength));
-            double bm25Score = idf * ((k1 + 1) * tf) / (K + tf);
-            postingsWithBM25.emplace_back(docID, bm25Score);
-        }
-
         // Sort postings by docID to ensure order
-        std::sort(postingsWithBM25.begin(), postingsWithBM25.end());
+        std::sort(postingsList.begin(), postingsList.end());
 
-        // Prepare data for compression
-        std::vector<int> docIDGaps(postingsWithBM25.size());
-        std::vector<int> bm25ScoresQuantized(postingsWithBM25.size());
-
-        // Compute gaps and quantize BM25 scores
-        docIDGaps[0] = std::get<0>(postingsWithBM25[0]);
-        bm25ScoresQuantized[0] = static_cast<int>(std::get<1>(postingsWithBM25[0]) * 1000);  // Quantize BM25 score
-        for (size_t i = 1; i < postingsWithBM25.size(); ++i) {
-            docIDGaps[i] = std::get<0>(postingsWithBM25[i]) - std::get<0>(postingsWithBM25[i - 1]);
-            bm25ScoresQuantized[i] = static_cast<int>(std::get<1>(postingsWithBM25[i]) * 1000);
+        // Compute docID gaps
+        std::vector<int> docIDGaps(postingsList.size());
+        int lastDocID = 0;
+        for (size_t i = 0; i < postingsList.size(); ++i) {
+            docIDGaps[i] = postingsList[i] - lastDocID;
+            lastDocID = postingsList[i];
         }
 
-        // Compress docID gaps and BM25 scores
+        // Compress docID gaps
         std::vector<unsigned char> compressedDocIDs = varbyteEncodeList(docIDGaps);
-        std::vector<unsigned char> compressedBM25Scores = varbyteEncodeList(bm25ScoresQuantized);
-
-        LexiconEntry entry;
-        entry.offset = offset;
-        entry.docFrequency = df;
-        entry.docIDsLength = compressedDocIDs.size();
-        entry.length = compressedDocIDs.size() + compressedBM25Scores.size();
 
         // Write to index file
+        int64_t offsetBefore = offset;
         indexFile.write(reinterpret_cast<char*>(compressedDocIDs.data()), compressedDocIDs.size());
-        indexFile.write(reinterpret_cast<char*>(compressedBM25Scores.data()), compressedBM25Scores.size());
-        offset += entry.length;
+        offset += compressedDocIDs.size();
 
         // Update lexicon
+        LexiconEntry entry;
+        entry.offset = offsetBefore;
+        entry.length = compressedDocIDs.size();
+        entry.docFrequency = df;
+        entry.blockCount = 0; // Not using blocking in this version
+
         lexicon[currentTerm] = entry;
     }
 
@@ -217,7 +189,7 @@ void mergeTempFiles(int numFiles, std::unordered_map<std::string, LexiconEntry> 
         file.close();
     }
     indexFile.close();
-    logMessage("Merging completed with BM25 scores.");
+    logMessage("Merging completed.");
 }
 
 // Function to write the lexicon to a file
@@ -238,7 +210,9 @@ void writeLexiconToFile(const std::unordered_map<std::string, LexiconEntry> &lex
         lexiconFile.write(reinterpret_cast<const char*>(&entry.offset), sizeof(entry.offset));
         lexiconFile.write(reinterpret_cast<const char*>(&entry.length), sizeof(entry.length));
         lexiconFile.write(reinterpret_cast<const char*>(&entry.docFrequency), sizeof(entry.docFrequency));
-        lexiconFile.write(reinterpret_cast<const char*>(&entry.docIDsLength), sizeof(entry.docIDsLength));
+
+        // Since we're not using blocking, set blockCount to 0
+        lexiconFile.write(reinterpret_cast<const char*>(&entry.blockCount), sizeof(entry.blockCount));
     }
 
     lexiconFile.close();
@@ -261,59 +235,15 @@ int main() {
         return 1;
     }
 
-    // Calculate total number of documents and average document length
-    int totalDocuments = 0;
-    double totalDocLength = 0.0;
-    std::unordered_map<int, int> docLengths;  // Map of docID to document length
-
-    // Read temp files to collect document lengths
-    for (int i = 0; i < numTempFiles; ++i) {
-        std::ifstream tempFile("../data/intermediate/temp" + std::to_string(i) + ".bin", std::ios::binary);
-        if (!tempFile.is_open()) {
-            logMessage("Error opening temp file for document length calculation.");
-            return 1;
-        }
-
-        while (tempFile.peek() != EOF) {
-            uint16_t termLength;
-            tempFile.read(reinterpret_cast<char*>(&termLength), sizeof(termLength));
-            std::string term(termLength, ' ');
-            tempFile.read(&term[0], termLength);
-            int docID;
-            tempFile.read(reinterpret_cast<char*>(&docID), sizeof(docID));
-            int tf;
-            tempFile.read(reinterpret_cast<char*>(&tf), sizeof(tf));
-            int docLength;
-            tempFile.read(reinterpret_cast<char*>(&docLength), sizeof(docLength));
-
-            // Collect document lengths
-            docLengths[docID] = docLength;
-
-            // Skip to next entry (if there are any additional fields)
-            // Assuming no additional fields, else adjust accordingly
-        }
-
-        tempFile.close();
-    }
-
-    // Compute total documents and average document length
-    totalDocuments = docLengths.size();
-    for (const auto &[docID, length] : docLengths) {
-        totalDocLength += length;
-    }
-    double avgDocLength = totalDocLength / totalDocuments;
-
     std::unordered_map<std::string, LexiconEntry> lexicon;
 
-    // Merge temp files to create the inverted index and lexicon with BM25 scores
-    mergeTempFiles(numTempFiles, lexicon, totalDocuments, avgDocLength);
+    // Merge temp files to create the inverted index and lexicon
+    mergeTempFiles(numTempFiles, lexicon);
 
     // Write the lexicon to file
     writeLexiconToFile(lexicon);
 
-    logMessage("Merging process completed with BM25 scores.");
+    logMessage("Merging process completed.");
 
     return 0;
 }
-
-

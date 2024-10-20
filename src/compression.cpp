@@ -41,3 +41,17 @@ std::vector<int> varbyteDecodeList(const std::vector<unsigned char> &bytes) {
 
     return decoded;
 }
+
+int varbyteDecodeNumber(const std::vector<unsigned char> &data, size_t &pos) {
+    int number = 0;
+    int shift = 0;
+    while (pos < data.size()) {
+        unsigned char byte = data[pos++];
+        number |= (byte & 0x7F) << shift;
+        if ((byte & 0x80) == 0) {  // Continuation bit not set
+            break;
+        }
+        shift += 7;
+    }
+    return number;
+}

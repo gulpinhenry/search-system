@@ -160,7 +160,7 @@ int main(int argc, char *argv[])
         // Data structures for the page table
         std::unordered_map<int, std::string> pageTable;
 
-        generateTermDocPairsMT("../data/collection.tsv", pageTable, pool);
+        generateTermDocPairsMT("../data/collection_short.tsv", pageTable, pool);
 
         // Write the page table to file
         writePageTableToFile(pageTable);

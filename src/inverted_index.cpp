@@ -14,7 +14,6 @@ InvertedIndex::InvertedIndex(const std::string &indexFilename, const std::string
     loadLexicon(lexiconFilename);
 }
 
-// Load lexicon into main memory
 void InvertedIndex::loadLexicon(const std::string &lexiconFilename) {
     std::ifstream lexiconFile(lexiconFilename, std::ios::binary);
     if (!lexiconFile.is_open()) {
@@ -23,26 +22,37 @@ void InvertedIndex::loadLexicon(const std::string &lexiconFilename) {
     }
 
     while (lexiconFile.peek() != EOF) {
-        // Read term length
         uint16_t termLength;
         lexiconFile.read(reinterpret_cast<char*>(&termLength), sizeof(termLength));
-
-        // Read term
         std::string term(termLength, ' ');
         lexiconFile.read(&term[0], termLength);
 
-        // Read entry data
         LexiconEntry entry;
         lexiconFile.read(reinterpret_cast<char*>(&entry.offset), sizeof(entry.offset));
         lexiconFile.read(reinterpret_cast<char*>(&entry.length), sizeof(entry.length));
         lexiconFile.read(reinterpret_cast<char*>(&entry.docFrequency), sizeof(entry.docFrequency));
         lexiconFile.read(reinterpret_cast<char*>(&entry.docIDsLength), sizeof(entry.docIDsLength));
 
+        // Read block-related metadata
+        lexiconFile.read(reinterpret_cast<char*>(&entry.blockCount), sizeof(entry.blockCount));
+
+        // Read blockMaxDocIDs
+        entry.blockMaxDocIDs.resize(entry.blockCount);
+        for (int i = 0; i < entry.blockCount; ++i) {
+            lexiconFile.read(reinterpret_cast<char*>(&entry.blockMaxDocIDs[i]), sizeof(entry.blockMaxDocIDs[i]));
+        }
+
+        // Read blockOffsets
+        entry.blockOffsets.resize(entry.blockCount);
+        for (int i = 0; i < entry.blockCount; ++i) {
+            lexiconFile.read(reinterpret_cast<char*>(&entry.blockOffsets[i]), sizeof(entry.blockOffsets[i]));
+        }
+
         lexicon[term] = entry;
     }
-
     lexiconFile.close();
 }
+
 
 // Open an inverted list for a given term
 bool InvertedIndex::openList(const std::string &term) {
