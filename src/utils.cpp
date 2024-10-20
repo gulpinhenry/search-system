@@ -101,3 +101,19 @@ void writePageTableToFile(const std::unordered_map<int, std::string> &pageTable)
     pageTableFile.close();
     logMessage("Page table written to file.");
 }
+
+void writeDocLengthsToFile(const std::unordered_map<int, int> &docLengths) {
+    std::ofstream docLengthsFile("../data/doc_lengths.bin", std::ios::binary);
+    if (!docLengthsFile.is_open()) {
+        logMessage("Error opening doc_lengths.bin for writing.");
+        return;
+    }
+
+    for (const auto &[docID, docLength] : docLengths) {
+        docLengthsFile.write(reinterpret_cast<const char *>(&docID), sizeof(docID));
+        docLengthsFile.write(reinterpret_cast<const char *>(&docLength), sizeof(docLength));
+    }
+
+    docLengthsFile.close();
+    logMessage("Document lengths written to doc_lengths.bin.");
+}

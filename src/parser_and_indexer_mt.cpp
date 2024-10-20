@@ -14,6 +14,10 @@
 #include <ctime>
 #include <cstdint>
 #include <atomic>
+#include <string>
+#include <unordered_map>
+#include <mutex>
+#include <vector>
 
 // Log messages to a file (for debugging purposes)
 std::ofstream logFile("../logs/parserMT.log", std::ios::app);
@@ -27,10 +31,16 @@ void logMessage(const std::string &message)
     std::time_t currentTime = std::time(nullptr);
     logFile << std::asctime(std::localtime(&currentTime)) << message << std::endl;
 }
-void processPassageMT(int docID, const std::string &passage, std::vector<TermDocPair> &termDocPairs, std::mutex &termDocPairsMutex, std::atomic<int> &fileCounter)
+void processPassageMT(int docID, const std::string &passage, std::vector<TermDocPair> &termDocPairs, std::mutex &termDocPairsMutex, std::atomic<int> &fileCounter, std::unordered_map<int, int> &docLengths, std::mutex &docLengthsMutex)
 {
     logMessage("Processing passage for docID: " + std::to_string(docID));
     auto terms = tokenize(passage);
+
+    // Store the document length
+    {
+        std::lock_guard<std::mutex> docLengthsLock(docLengthsMutex);
+        docLengths[docID] = terms.size();
+    }
 
     // Reserve space to avoid frequent reallocations
     {
@@ -65,8 +75,10 @@ void processPassageMT(int docID, const std::string &passage, std::vector<TermDoc
     }
 }
 
+
+
 // function similar to generateTermDocPairs but with multi threading
-void generateTermDocPairsMT(const std::string &inputFile, std::unordered_map<int, std::string> &pageTable, ThreadPool *threadPool)
+void generateTermDocPairsMT(const std::string &inputFile, std::unordered_map<int, std::string> &pageTable, ThreadPool *threadPool, std::unordered_map<int, int> &docLengths, std::mutex &docLengthsMutex)
 {
     std::ifstream inputFileStream(inputFile);
     if (!inputFileStream.is_open())
@@ -80,26 +92,26 @@ void generateTermDocPairsMT(const std::string &inputFile, std::unordered_map<int
     std::atomic<int> docID(0);
     std::atomic<int> fileCounter{0};
 
-
     while (std::getline(inputFileStream, line))
     {
-        auto task = [line, &pageTableMutex, &pageTable, &docID, &termDocPairs, &termDocPairsMutex, &fileCounter]()
+        auto task = [line, &pageTableMutex, &pageTable, &docID, &termDocPairs, &termDocPairsMutex, &fileCounter, &docLengths, &docLengthsMutex]()
         {
-                size_t tabPos = line.find('\t');
-                if (tabPos != std::string::npos)
+            size_t tabPos = line.find('\t');
+            if (tabPos != std::string::npos)
+            {
+                std::string docName = line.substr(0, tabPos);
+                std::string passage = line.substr(tabPos + 1);
+                int _docId = docID++;
+
                 {
-                    std::string docName = line.substr(0, tabPos);
-                    std::string passage = line.substr(tabPos + 1);
-                    int _docId = docID++;
+                    std::lock_guard<std::mutex> pageTableLock(pageTableMutex);
+                    // Store in page table
+                    pageTable[_docId] = docName;
+                }
 
-                    {
-                        std::lock_guard<std::mutex> pageTableLock(pageTableMutex);
-                        // Store in page table
-                        pageTable[_docId] = docName;
-                    }
-
-                    processPassageMT(_docId, passage, termDocPairs, termDocPairsMutex, fileCounter);
-                } };
+                processPassageMT(_docId, passage, termDocPairs, termDocPairsMutex, fileCounter, docLengths, docLengthsMutex);
+            }
+        };
         if (threadPool)
         {
             threadPool->enqueue(task);
@@ -110,13 +122,20 @@ void generateTermDocPairsMT(const std::string &inputFile, std::unordered_map<int
             task();
         }
     }
+
+    // Wait for all tasks to finish
+    threadPool->waitAll();
+
+    // Clean up the thread pool
     delete threadPool;
+
+    // Handle any remaining term-doc pairs
     auto task = [&termDocPairs, &termDocPairsMutex, &fileCounter]()
     {
         std::lock_guard<std::mutex> termDocPairsLock(termDocPairsMutex);
         if (termDocPairs.size() > 0)
         {
-            std::cout << "Write remain TermDocPairs to temp." << std::endl;
+            std::cout << "Write remaining TermDocPairs to temp." << std::endl;
             saveTermDocPairsToFile(termDocPairs, fileCounter++);
         }
         else
@@ -124,6 +143,9 @@ void generateTermDocPairsMT(const std::string &inputFile, std::unordered_map<int
     };
     task();
 }
+
+
+
 #include <chrono>
 
 int main(int argc, char *argv[])
@@ -157,13 +179,18 @@ int main(int argc, char *argv[])
         createDirectory("../data");
         createDirectory("../data/intermediate");
 
-        // Data structures for the page table
+        // Data structures for the page table and document lengths
         std::unordered_map<int, std::string> pageTable;
+        std::unordered_map<int, int> docLengths;
+        std::mutex docLengthsMutex;
 
-        generateTermDocPairsMT("../data/collection_short.tsv", pageTable, pool);
+        generateTermDocPairsMT("../data/collection_short.tsv", pageTable, pool, docLengths, docLengthsMutex);
 
         // Write the page table to file
         writePageTableToFile(pageTable);
+
+        // Write the document lengths to file
+        writeDocLengthsToFile(docLengths);
 
         logMessage("Parsing process with multi-threading completed.");
     }
