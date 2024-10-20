@@ -184,7 +184,7 @@ int main(int argc, char *argv[])
         std::unordered_map<int, int> docLengths;
         std::mutex docLengthsMutex;
 
-        generateTermDocPairsMT("../data/collection.tsv", pageTable, pool, docLengths, docLengthsMutex);
+        generateTermDocPairsMT("../data/collection_short.tsv", pageTable, pool, docLengths, docLengthsMutex);
 
         // Write the page table to file
         writePageTableToFile(pageTable);

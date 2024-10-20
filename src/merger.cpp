@@ -12,14 +12,13 @@
 #include <functional>
 #include <filesystem>
 #include <ctime>
-#include <algorithm> // For std::sort
+#include <algorithm> 
 
 namespace fs = std::filesystem;
 
-// Block size (number of postings per block)
+// number of postings per block
 const int BLOCK_SIZE = 128;
 
-// Log messages to a file (for debugging purposes)
 std::ofstream logFile("../logs/merge.log", std::ios::app);
 
 void logMessage(const std::string &message) {
