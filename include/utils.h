@@ -37,5 +37,7 @@ void createDirectory(const std::string &dir);
 std::vector<std::string> tokenize(const std::string &text);
 void saveTermDocPairsToFile(const std::vector<TermDocPair> &termDocPairs, const int &fileCounter);
 void writePageTableToFile(const std::unordered_map<int, std::string> &pageTable);
+void writeDocLengthsToFile(const std::unordered_map<int, int> &docLengths);
+
 
 #endif
