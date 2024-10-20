@@ -1,111 +1,146 @@
-#include "compression.h"
-#include "merger.h"  // Include to access LexiconEntry
 #include <iostream>
 #include <fstream>
-#include <vector>
 #include <string>
+#include <vector>
 #include <unordered_map>
 #include <cstdint>
+#include <iomanip>
 
-// Function to read and print the lexicon file
-void readAndPrintLexicon(const std::string &filename) {
-    std::ifstream lexiconFile(filename, std::ios::binary);
+// Lexicon entry structure
+struct LexiconEntry {
+    int64_t offset;
+    int32_t length;
+    int32_t docFrequency;
+    int32_t blockCount;
+    std::vector<int32_t> blockMaxDocIDs; // Maximum docID in each block
+    std::vector<int64_t> blockOffsets;   // Offset of each block in the index file
+};
+
+// Function to read the lexicon from file
+std::unordered_map<std::string, LexiconEntry> readLexicon(const std::string &lexiconFilename) {
+    std::unordered_map<std::string, LexiconEntry> lexicon;
+
+    std::ifstream lexiconFile(lexiconFilename, std::ios::binary);
     if (!lexiconFile.is_open()) {
-        std::cerr << "Error opening lexicon file: " << filename << std::endl;
-        return;
+        std::cerr << "Error opening lexicon file: " << lexiconFilename << std::endl;
+        return lexicon;
     }
 
-    std::cout << "\nLexicon Contents:\n";
     while (lexiconFile.peek() != EOF) {
-        // Read term length
         uint16_t termLength;
         lexiconFile.read(reinterpret_cast<char*>(&termLength), sizeof(termLength));
+        if (!lexiconFile) break;
 
-        // Read term
-        std::string term(termLength, ' ');
-        lexiconFile.read(&term[0], termLength);
+        std::vector<char> termBuffer(termLength);
+        lexiconFile.read(termBuffer.data(), termLength);
+        if (!lexiconFile) break;
 
-        // Read LexiconEntry data
-        int64_t offset;
-        int length;
-        int docFrequency;
+        std::string term(termBuffer.begin(), termBuffer.end());
 
-        lexiconFile.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-        lexiconFile.read(reinterpret_cast<char*>(&length), sizeof(length));
-        lexiconFile.read(reinterpret_cast<char*>(&docFrequency), sizeof(docFrequency));
+        LexiconEntry entry;
+        lexiconFile.read(reinterpret_cast<char*>(&entry.offset), sizeof(entry.offset));
+        lexiconFile.read(reinterpret_cast<char*>(&entry.length), sizeof(entry.length));
+        lexiconFile.read(reinterpret_cast<char*>(&entry.docFrequency), sizeof(entry.docFrequency));
+        lexiconFile.read(reinterpret_cast<char*>(&entry.blockCount), sizeof(entry.blockCount));
 
-        // Print the lexicon entry
-        std::cout << "Term: " << term << ", Offset: " << offset
-                  << ", Length: " << length << ", DocFrequency: " << docFrequency << std::endl;
+        if (entry.blockCount > 0) {
+            entry.blockMaxDocIDs.resize(entry.blockCount);
+            for (int i = 0; i < entry.blockCount; ++i) {
+                lexiconFile.read(reinterpret_cast<char*>(&entry.blockMaxDocIDs[i]), sizeof(entry.blockMaxDocIDs[i]));
+            }
+
+            entry.blockOffsets.resize(entry.blockCount);
+            for (int i = 0; i < entry.blockCount; ++i) {
+                lexiconFile.read(reinterpret_cast<char*>(&entry.blockOffsets[i]), sizeof(entry.blockOffsets[i]));
+            }
+        }
+
+        lexicon[term] = entry;
     }
 
     lexiconFile.close();
+    return lexicon;
 }
 
-// Function to read and print the inverted index
-void readAndPrintInvertedIndex(const std::string &indexFilename, const std::string &lexiconFilename) {
+// Function to decompress a block of postings
+std::vector<int> decompressBlock(const std::vector<unsigned char>& blockData) {
+    size_t pos = 0;
+    int lastDocID = 0;
+    std::vector<int> docIDs;
+
+    while (pos < blockData.size()) {
+        int gap = 0;
+        int shift = 0;
+        while (true) {
+            unsigned char byte = blockData[pos++];
+            gap |= (byte & 0x7F) << shift;
+            if ((byte & 0x80) == 0) break;
+            shift += 7;
+        }
+        lastDocID += gap;
+        docIDs.push_back(lastDocID);
+    }
+
+    return docIDs;
+}
+
+// Function to read and display the index file contents in blocked format
+void displayIndex(const std::string &indexFilename, const std::unordered_map<std::string, LexiconEntry> &lexicon) {
     std::ifstream indexFile(indexFilename, std::ios::binary);
     if (!indexFile.is_open()) {
         std::cerr << "Error opening index file: " << indexFilename << std::endl;
         return;
     }
 
-    std::ifstream lexiconFile(lexiconFilename, std::ios::binary);
-    if (!lexiconFile.is_open()) {
-        std::cerr << "Error opening lexicon file: " << lexiconFilename << std::endl;
-        return;
-    }
+    for (const auto &[term, entry] : lexicon) {
+        std::cout << "Term: " << term << std::endl;
+        std::cout << "  Offset: " << entry.offset << std::endl;
+        std::cout << "  Length: " << entry.length << std::endl;
+        std::cout << "  Document Frequency: " << entry.docFrequency << std::endl;
+        std::cout << "  Block Count: " << entry.blockCount << std::endl;
 
-    std::cout << "\nInverted Index Contents:\n";
-    while (lexiconFile.peek() != EOF) {
-        // Read term length
-        uint16_t termLength;
-        lexiconFile.read(reinterpret_cast<char*>(&termLength), sizeof(termLength));
+        // Read and display each block
+        for (int i = 0; i < entry.blockCount; ++i) {
+            std::cout << "  Block " << i + 1 << ":" << std::endl;
+            std::cout << "    Max DocID: " << entry.blockMaxDocIDs[i] << std::endl;
+            std::cout << "    Offset: " << entry.blockOffsets[i] << std::endl;
 
-        // Read term
-        std::string term(termLength, ' ');
-        lexiconFile.read(&term[0], termLength);
+            // Seek to the block's offset
+            indexFile.seekg(entry.blockOffsets[i], std::ios::beg);
 
-        // Read LexiconEntry data
-        int64_t offset;
-        int length;
-        int docFrequency;
+            // Determine the length of the block (next block offset - current block offset)
+            int64_t blockLength = (i + 1 < entry.blockCount) 
+                                  ? entry.blockOffsets[i + 1] - entry.blockOffsets[i]
+                                  : entry.offset + entry.length - entry.blockOffsets[i];
 
-        lexiconFile.read(reinterpret_cast<char*>(&offset), sizeof(offset));
-        lexiconFile.read(reinterpret_cast<char*>(&length), sizeof(length));
-        lexiconFile.read(reinterpret_cast<char*>(&docFrequency), sizeof(docFrequency));
+            // Read and decompress the block
+            std::vector<unsigned char> blockData(blockLength);
+            indexFile.read(reinterpret_cast<char*>(blockData.data()), blockLength);
+            std::vector<int> docIDs = decompressBlock(blockData);
 
-        // Read postings list from index file
-        indexFile.seekg(offset, std::ios::beg);
-        std::vector<unsigned char> compressedData(length);
-        indexFile.read(reinterpret_cast<char*>(compressedData.data()), length);
-
-        // Decode postings
-        std::vector<int> gaps = varbyteDecodeList(compressedData);
-        std::vector<int> docIDs(gaps.size());
-        docIDs[0] = gaps[0];
-        for (size_t i = 1; i < gaps.size(); ++i) {
-            docIDs[i] = docIDs[i - 1] + gaps[i];
+            // Display the postings in this block
+            std::cout << "    Postings (DocIDs): ";
+            for (int docID : docIDs) {
+                std::cout << docID << " ";
+            }
+            std::cout << std::endl;
         }
 
-        // Print postings list
-        std::cout << "Term: " << term << ", Postings: ";
-        for (const auto &docID : docIDs) {
-            std::cout << docID << " ";
-        }
         std::cout << std::endl;
     }
 
     indexFile.close();
-    lexiconFile.close();
 }
 
 int main() {
-    // Read and print the lexicon
-    readAndPrintLexicon("../data/lexicon.bin");
+    std::string lexiconFilename = "../data/lexicon.bin";
+    std::string indexFilename = "../data/index.bin";
 
-    // Read and print the inverted index
-    readAndPrintInvertedIndex("../data/index.bin", "../data/lexicon.bin");
+    // Read the lexicon
+    auto lexicon = readLexicon(lexiconFilename);
+
+    // Display the contents of the index file
+    displayIndex(indexFilename, lexicon);
 
     return 0;
 }

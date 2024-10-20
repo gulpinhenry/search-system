@@ -1,15 +1,15 @@
-#include "parser_and_indexer.h"
+#include "utils.h"
+#include <sys/stat.h>
+#include <iostream>
+
 #include <iostream>
 #include <fstream>
-#include <unordered_map>
-#include <vector>
+#include <algorithm>
 #include <sstream>
-#include <algorithm>
-#include <iterator>
-#include <sys/stat.h>
-#include <ctime>
+
 #include <cstdint>
-#include <algorithm>
+
+
 
 #ifdef _WIN32
     #include <direct.h>  // For _mkdir on Windows
@@ -17,19 +17,6 @@
 #else
     #include <sys/stat.h>  // For mkdir on Unix
 #endif
-
-#define MAX_RECORDS 1000000  // Maximum number of term-docID pairs in memory
-
-// Log messages to a file (for debugging purposes)
-std::ofstream logFile("../logs/parser.log", std::ios::app);
-void logMessage(const std::string &message) {
-    if (!logFile.is_open()) {
-        std::cerr << "Failed to open log file!" << std::endl;
-        return;
-    }
-    std::time_t currentTime = std::time(nullptr);
-    logFile << std::asctime(std::localtime(&currentTime)) << message << std::endl;
-}
 
 // Helper function to create directories for data 
 void createDirectory(const std::string &dir) {
@@ -62,20 +49,10 @@ std::vector<std::string> tokenize(const std::string &text) {
     }
     return tokens;
 }
-
-// Function to process a single passage and generate term-docID pairs
-void processPassage(int docID, const std::string &passage, std::vector<TermDocPair> &termDocPairs) {
-    logMessage("Processing passage for docID: " + std::to_string(docID));
-    auto terms = tokenize(passage);
-
-    // For each term, generate a TermDocPair
-    for (const auto &term : terms) {
-        termDocPairs.push_back({term, docID});
-    }
-}
+extern void logMessage(const std::string &message);
 
 // Save term-docID pairs to a temp file
-void saveTermDocPairsToFile(const std::vector<TermDocPair> &termDocPairs, int &fileCounter) {
+void saveTermDocPairsToFile(const std::vector<TermDocPair> &termDocPairs, const int &fileCounter) {
     // Sort the termDocPairs by term and docID
     std::vector<TermDocPair> sortedPairs = termDocPairs;
     std::sort(sortedPairs.begin(), sortedPairs.end(), [](const TermDocPair &a, const TermDocPair &b) {
@@ -86,7 +63,7 @@ void saveTermDocPairsToFile(const std::vector<TermDocPair> &termDocPairs, int &f
     });
 
     // Create a new temp file
-    std::ofstream tempFile("../data/intermediate/temp" + std::to_string(fileCounter++) + ".bin", std::ios::binary);
+    std::ofstream tempFile("../data/intermediate/temp" + std::to_string(fileCounter) + ".bin", std::ios::binary);
     if (!tempFile.is_open()) {
         logMessage("Error opening temp file for writing.");
         return;
@@ -103,48 +80,6 @@ void saveTermDocPairsToFile(const std::vector<TermDocPair> &termDocPairs, int &f
     tempFile.close();
     logMessage("Saved term-docID pairs to temp file.");
 }
-
-// Generate term-docID pairs using the specified algorithm
-void generateTermDocPairs(const std::string &inputFile, std::unordered_map<int, std::string> &pageTable) {
-    std::ifstream inputFileStream(inputFile);
-    if (!inputFileStream.is_open()) {
-        logMessage("Error opening input file: " + inputFile);
-        return;
-    }
-
-    std::vector<TermDocPair> termDocPairs;
-    std::string line;
-    int docID = 0;
-    int fileCounter = 0;
-
-    while (std::getline(inputFileStream, line)) {
-        size_t tabPos = line.find('\t');
-        if (tabPos != std::string::npos) {
-            std::string docName = line.substr(0, tabPos);
-            std::string passage = line.substr(tabPos + 1);
-
-            // Store in page table
-            pageTable[docID] = docName;
-
-            processPassage(docID++, passage, termDocPairs);
-
-            // Check if termDocPairs reached MAX_RECORDS
-            if (termDocPairs.size() >= MAX_RECORDS) {
-                saveTermDocPairsToFile(termDocPairs, fileCounter);
-                termDocPairs.clear();  // Clear buffer after saving
-            }
-        }
-    }
-
-    // Save remaining termDocPairs
-    if (!termDocPairs.empty()) {
-        saveTermDocPairsToFile(termDocPairs, fileCounter);
-    }
-
-    inputFileStream.close();
-    logMessage("Term-DocID pair generation completed.");
-}
-
 // Write the page table to a binary file
 void writePageTableToFile(const std::unordered_map<int, std::string> &pageTable) {
     std::ofstream pageTableFile("../data/page_table.bin", std::ios::binary);
@@ -167,20 +102,18 @@ void writePageTableToFile(const std::unordered_map<int, std::string> &pageTable)
     logMessage("Page table written to file.");
 }
 
-int main() {
-    createDirectory("../data");
-    createDirectory("../data/intermediate");
+void writeDocLengthsToFile(const std::unordered_map<int, int> &docLengths) {
+    std::ofstream docLengthsFile("../data/doc_lengths.bin", std::ios::binary);
+    if (!docLengthsFile.is_open()) {
+        logMessage("Error opening doc_lengths.bin for writing.");
+        return;
+    }
 
-    // Data structures for the page table
-    std::unordered_map<int, std::string> pageTable;
+    for (const auto &[docID, docLength] : docLengths) {
+        docLengthsFile.write(reinterpret_cast<const char *>(&docID), sizeof(docID));
+        docLengthsFile.write(reinterpret_cast<const char *>(&docLength), sizeof(docLength));
+    }
 
-    // Generate term-docID pairs from the input collection
-    generateTermDocPairs("../data/collection.tsv", pageTable);
-
-    // Write the page table to file
-    writePageTableToFile(pageTable);
-
-    logMessage("Parsing process completed.");
-
-    return 0;
+    docLengthsFile.close();
+    logMessage("Document lengths written to doc_lengths.bin.");
 }

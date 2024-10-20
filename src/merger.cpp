@@ -1,3 +1,4 @@
+// merger.cpp
 #include "merger.h"
 #include "compression.h"
 #include <iostream>
@@ -11,10 +12,13 @@
 #include <functional>
 #include <filesystem>
 #include <ctime>
+#include <algorithm> 
 
 namespace fs = std::filesystem;
 
-// Log messages to a file (for debugging purposes)
+// number of postings per block
+const int BLOCK_SIZE = 128;
+
 std::ofstream logFile("../logs/merge.log", std::ios::app);
 
 void logMessage(const std::string &message) {
@@ -51,24 +55,33 @@ void mergeTempFiles(int numFiles, std::unordered_map<std::string, LexiconEntry> 
         }
         return std::get<0>(a) > std::get<0>(b);  // Compare terms
     };
-    std::priority_queue<std::tuple<std::string, int, int>, std::vector<std::tuple<std::string, int, int>>, decltype(cmp)> pq(cmp);
+    std::priority_queue<
+        std::tuple<std::string, int, int>,
+        std::vector<std::tuple<std::string, int, int>>,
+        decltype(cmp)
+    > pq(cmp);
 
     // Initial read from each temp file
     for (int i = 0; i < numFiles; ++i) {
         if (tempFiles[i].peek() != EOF) {
             uint16_t termLength;
             tempFiles[i].read(reinterpret_cast<char*>(&termLength), sizeof(termLength));
-            std::string term(termLength, ' ');
-            tempFiles[i].read(&term[0], termLength);
+            if (!tempFiles[i]) continue; // Error or EOF
+            std::vector<char> termBuffer(termLength);
+            tempFiles[i].read(termBuffer.data(), termLength);
+            if (!tempFiles[i]) continue; // Error or EOF
+            std::string term(termBuffer.begin(), termBuffer.end());
+
             int docID;
             tempFiles[i].read(reinterpret_cast<char*>(&docID), sizeof(docID));
+            if (!tempFiles[i]) continue; // Error or EOF
 
             pq.push(std::make_tuple(term, docID, i));
         }
     }
 
     std::string currentTerm;
-    std::vector<int> docIDs;
+    std::vector<int> postingsList;  // Stores docIDs
     int64_t offset = 0;
 
     while (!pq.empty()) {
@@ -80,67 +93,93 @@ void mergeTempFiles(int numFiles, std::unordered_map<std::string, LexiconEntry> 
         }
 
         if (term != currentTerm) {
-            // Write postings list for currentTerm
-            LexiconEntry entry;
-            entry.offset = offset;
-            entry.docFrequency = docIDs.size();
+            // Process postingsList for currentTerm
+            int df = postingsList.size();
 
-            // Compress docIDs
-            std::vector<int> gaps(docIDs.size());
-            gaps[0] = docIDs[0];
-            for (size_t i = 1; i < docIDs.size(); ++i) {
-                gaps[i] = docIDs[i] - docIDs[i - 1];
+            // Sort postings by docID to ensure order
+            std::sort(postingsList.begin(), postingsList.end());
+
+            // Compute docID gaps
+            std::vector<int> docIDGaps(postingsList.size());
+            int lastDocID = 0;
+            for (size_t i = 0; i < postingsList.size(); ++i) {
+                docIDGaps[i] = postingsList[i] - lastDocID;
+                lastDocID = postingsList[i];
             }
-            std::vector<unsigned char> compressedDocIDs = varbyteEncodeList(gaps);
-            entry.length = compressedDocIDs.size();
+
+            // Compress docID gaps
+            std::vector<unsigned char> compressedDocIDs = varbyteEncodeList(docIDGaps);
 
             // Write to index file
+            int64_t offsetBefore = offset;
             indexFile.write(reinterpret_cast<char*>(compressedDocIDs.data()), compressedDocIDs.size());
             offset += compressedDocIDs.size();
 
             // Update lexicon
+            LexiconEntry entry;
+            entry.offset = offsetBefore;
+            entry.length = compressedDocIDs.size();
+            entry.docFrequency = df;
+            entry.blockCount = 0; // Not using blocking in this version
+
             lexicon[currentTerm] = entry;
 
             // Reset for new term
             currentTerm = term;
-            docIDs.clear();
+            postingsList.clear();
         }
 
-        docIDs.push_back(docID);
+        // Add current posting to postingsList
+        postingsList.push_back(docID);
 
-        // Read next term-docID pair from the same temp file
+        // Read next term-docID tuple from the same temp file
         if (tempFiles[fileIndex].peek() != EOF) {
             uint16_t termLength;
             tempFiles[fileIndex].read(reinterpret_cast<char*>(&termLength), sizeof(termLength));
-            std::string nextTerm(termLength, ' ');
-            tempFiles[fileIndex].read(&nextTerm[0], termLength);
+            if (!tempFiles[fileIndex]) continue; // Error or EOF
+            std::vector<char> termBuffer(termLength);
+            tempFiles[fileIndex].read(termBuffer.data(), termLength);
+            if (!tempFiles[fileIndex]) continue; // Error or EOF
+            std::string nextTerm(termBuffer.begin(), termBuffer.end());
+
             int nextDocID;
             tempFiles[fileIndex].read(reinterpret_cast<char*>(&nextDocID), sizeof(nextDocID));
+            if (!tempFiles[fileIndex]) continue; // Error or EOF
 
             pq.push(std::make_tuple(nextTerm, nextDocID, fileIndex));
         }
     }
 
-    // Write postings list for the last term
-    if (!docIDs.empty()) {
-        LexiconEntry entry;
-        entry.offset = offset;
-        entry.docFrequency = docIDs.size();
+    // Process postingsList for the last term
+    if (!postingsList.empty()) {
+        int df = postingsList.size();
 
-        // Compress docIDs
-        std::vector<int> gaps(docIDs.size());
-        gaps[0] = docIDs[0];
-        for (size_t i = 1; i < docIDs.size(); ++i) {
-            gaps[i] = docIDs[i] - docIDs[i - 1];
+        // Sort postings by docID to ensure order
+        std::sort(postingsList.begin(), postingsList.end());
+
+        // Compute docID gaps
+        std::vector<int> docIDGaps(postingsList.size());
+        int lastDocID = 0;
+        for (size_t i = 0; i < postingsList.size(); ++i) {
+            docIDGaps[i] = postingsList[i] - lastDocID;
+            lastDocID = postingsList[i];
         }
-        std::vector<unsigned char> compressedDocIDs = varbyteEncodeList(gaps);
-        entry.length = compressedDocIDs.size();
+
+        // Compress docID gaps
+        std::vector<unsigned char> compressedDocIDs = varbyteEncodeList(docIDGaps);
 
         // Write to index file
+        int64_t offsetBefore = offset;
         indexFile.write(reinterpret_cast<char*>(compressedDocIDs.data()), compressedDocIDs.size());
         offset += compressedDocIDs.size();
 
         // Update lexicon
+        LexiconEntry entry;
+        entry.offset = offsetBefore;
+        entry.length = compressedDocIDs.size();
+        entry.docFrequency = df;
+        entry.blockCount = 0; // Not using blocking in this version
+
         lexicon[currentTerm] = entry;
     }
 
@@ -152,7 +191,7 @@ void mergeTempFiles(int numFiles, std::unordered_map<std::string, LexiconEntry> 
     logMessage("Merging completed.");
 }
 
-// Write the lexicon to a binary file
+// Function to write the lexicon to a file
 void writeLexiconToFile(const std::unordered_map<std::string, LexiconEntry> &lexicon) {
     std::ofstream lexiconFile("../data/lexicon.bin", std::ios::binary);
     if (!lexiconFile.is_open()) {
@@ -170,6 +209,9 @@ void writeLexiconToFile(const std::unordered_map<std::string, LexiconEntry> &lex
         lexiconFile.write(reinterpret_cast<const char*>(&entry.offset), sizeof(entry.offset));
         lexiconFile.write(reinterpret_cast<const char*>(&entry.length), sizeof(entry.length));
         lexiconFile.write(reinterpret_cast<const char*>(&entry.docFrequency), sizeof(entry.docFrequency));
+
+        // Since we're not using blocking, set blockCount to 0
+        lexiconFile.write(reinterpret_cast<const char*>(&entry.blockCount), sizeof(entry.blockCount));
     }
 
     lexiconFile.close();
