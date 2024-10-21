@@ -86,20 +86,20 @@ void readPairToPQ(std::ifstream& tempFile, int &fileIndex, TuplePQ &pq) {
     uint16_t termLength;
     tempFile.read(reinterpret_cast<char *>(&termLength), sizeof(termLength));
     if (!tempFile)
-        exit -2;
+        exit(-2);
     std::vector<char> termBuffer(termLength);
     tempFile.read(termBuffer.data(), termLength);
     if (!tempFile)
-        exit -2; // Error or EOF
+        exit(-2); // Error or EOF
     std::string term(termBuffer.begin(), termBuffer.end());
     int docID;
     tempFile.read(reinterpret_cast<char *>(&docID), sizeof(docID));
     if (!tempFile)
-        exit -2; // Error or EOF
+        exit(-2); // Error or EOF
     float termFreqScore;
     tempFile.read(reinterpret_cast<char *>(&termFreqScore), sizeof(termFreqScore));
     if (!tempFile)
-        exit -2; // Error or EOF
+        exit(-2); // Error or EOF
     pq.push(std::make_tuple(term, docID, fileIndex, termFreqScore));
 }
 
