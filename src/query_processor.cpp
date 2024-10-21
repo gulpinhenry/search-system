@@ -22,6 +22,9 @@ InvertedListPointer::InvertedListPointer(std::ifstream *indexFile, const Lexicon
     indexFile->seekg(lexEntry.offset, std::ios::beg);
     compressedData.resize(lexEntry.length);
     indexFile->read(reinterpret_cast<char*>(compressedData.data()), lexEntry.length);
+    termFreqScore.resize(lexEntry.length);
+    indexFile->read(reinterpret_cast<char*>(termFreqScore.data()), lexEntry.length * sizeof(float));
+
 }
 
 bool InvertedListPointer::next() {

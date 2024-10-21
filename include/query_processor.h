@@ -35,6 +35,7 @@ private:
     int lastDocID;
     size_t bufferPos;
     std::vector<unsigned char> compressedData;
+    std::vector<float> termFreqScore;
 };
 
 class InvertedIndex {
