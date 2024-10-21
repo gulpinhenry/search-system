@@ -11,9 +11,11 @@
 struct TermDocPair {
     std::string term;
     int docID;
+    float termFScore;
 
     // Constructor
-    TermDocPair(const std::string& t, int d) : term(t), docID(d) {}
+    TermDocPair(const std::string& t, int d, float termFScore) : term(t), docID(d), 
+                                                        termFScore(termFScore) {}
 
     // Default constructor (needed by std::vector)
     TermDocPair() = default;

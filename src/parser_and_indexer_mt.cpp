@@ -18,6 +18,11 @@
 #include <unordered_map>
 #include <mutex>
 #include <vector>
+#include <map>
+
+const float k1 = 1.5;
+const float b = 0.75;
+const float avgDocLen = 55.9879;
 
 // Log messages to a file (for debugging purposes)
 std::ofstream logFile("../logs/parserMT.log", std::ios::app);
@@ -31,6 +36,12 @@ void logMessage(const std::string &message)
     std::time_t currentTime = std::time(nullptr);
     logFile << std::asctime(std::localtime(&currentTime)) << message << std::endl;
 }
+
+inline float calculateTermFreqScore(float termFreq, float k, float b, float documentLen, float avgDocumentLen)
+{
+    return (termFreq * (k + 1)) / (termFreq + k * (1 - b + b * documentLen / avgDocumentLen));
+}
+
 void processPassageMT(int docID, const std::string &passage, std::vector<TermDocPair> &termDocPairs, std::mutex &termDocPairsMutex, std::atomic<int> &fileCounter, std::unordered_map<int, int> &docLengths, std::mutex &docLengthsMutex)
 {
     logMessage("Processing passage for docID: " + std::to_string(docID));
@@ -45,23 +56,43 @@ void processPassageMT(int docID, const std::string &passage, std::vector<TermDoc
     // Reserve space to avoid frequent reallocations
     {
         std::unique_lock<std::mutex> lock(termDocPairsMutex);
-        if (termDocPairs.capacity() < MAX_RECORDS) {
+        if (termDocPairs.capacity() < MAX_RECORDS)
+        {
             termDocPairs.reserve(MAX_RECORDS);
+        }
+    }
+
+    std::map<std::string, int> frequencyMap;
+
+    for (const auto &term : terms)
+    {
+        if (frequencyMap.count(term))
+        {
+            frequencyMap[term]++;
+        }
+        else
+        {
+            frequencyMap.insert({term, 1});
         }
     }
 
     // Lock the mutex while modifying termDocPairs
     std::unique_lock<std::mutex> termDocPairsLock(termDocPairsMutex);
 
+    int docLen = terms.size();
+
     // Add terms to termDocPairs
-    for (const auto &term : terms) {
-        termDocPairs.emplace_back(term, docID);
+    for (const auto &termFreqPair : frequencyMap)
+    {
+        termDocPairs.emplace_back(termFreqPair.first, docID,
+                                  calculateTermFreqScore(termFreqPair.second, k1, b, docLen, avgDocLen));
     }
 
     // If the vector reaches the max size, move its contents to a local copy
-    if (termDocPairs.size() >= MAX_RECORDS) {
+    if (termDocPairs.size() >= MAX_RECORDS)
+    {
         std::vector<TermDocPair> termDocPairsCopy(std::move(termDocPairs));
-        termDocPairs.clear();  // Clear the original vector for reuse
+        termDocPairs.clear(); // Clear the original vector for reuse
 
         // Unlock the mutex early since we're done with the shared data
         termDocPairsLock.unlock();
@@ -74,8 +105,6 @@ void processPassageMT(int docID, const std::string &passage, std::vector<TermDoc
         saveTermDocPairsToFile(termDocPairsCopy, curFileCounter);
     }
 }
-
-
 
 // function similar to generateTermDocPairs but with multi threading
 void generateTermDocPairsMT(const std::string &inputFile, std::unordered_map<int, std::string> &pageTable, ThreadPool *threadPool, std::unordered_map<int, int> &docLengths, std::mutex &docLengthsMutex)
@@ -144,8 +173,6 @@ void generateTermDocPairsMT(const std::string &inputFile, std::unordered_map<int
     task();
 }
 
-
-
 #include <chrono>
 
 int main(int argc, char *argv[])
@@ -184,7 +211,7 @@ int main(int argc, char *argv[])
         std::unordered_map<int, int> docLengths;
         std::mutex docLengthsMutex;
 
-        generateTermDocPairsMT("../data/collection_short.tsv", pageTable, pool, docLengths, docLengthsMutex);
+        generateTermDocPairsMT("../data/collection.tsv", pageTable, pool, docLengths, docLengthsMutex);
 
         // Write the page table to file
         writePageTableToFile(pageTable);

@@ -75,6 +75,7 @@ void saveTermDocPairsToFile(const std::vector<TermDocPair> &termDocPairs, const 
         tempFile.write(reinterpret_cast<const char*>(&termLength), sizeof(termLength));
         tempFile.write(pair.term.c_str(), termLength);
         tempFile.write(reinterpret_cast<const char*>(&pair.docID), sizeof(pair.docID));
+        tempFile.write(reinterpret_cast<const char*>(&pair.termFScore), sizeof(pair.termFScore));
     }
 
     tempFile.close();
