@@ -4,4 +4,5 @@
 *.txt
 *.bin
 *.exe
-./build/
+/build/*
+/data/*

@@ -12,22 +12,31 @@
 // Constants for BM25
 const double k1 = 1.5;
 const double b = 0.75;
+const int64_t documentLen = 8841823;
 
 // --- InvertedListPointer Implementation ---
 
 InvertedListPointer::InvertedListPointer(std::ifstream *indexFile, const LexiconEntry &lexEntry)
     : indexFile(indexFile), lexEntry(lexEntry), currentDocID(-1), valid(true),
-      lastDocID(0), bufferPos(0) {
+      lastDocID(0), bufferPos(0), termFreqScoreIndex(-1) {
     // Read compressed data from index file
     indexFile->seekg(lexEntry.offset, std::ios::beg);
     compressedData.resize(lexEntry.length);
     indexFile->read(reinterpret_cast<char*>(compressedData.data()), lexEntry.length);
+    termFreqScore.resize(lexEntry.length);
+    indexFile->read(reinterpret_cast<char*>(termFreqScore.data()), lexEntry.length * sizeof(float));
+
 }
 
 bool InvertedListPointer::next() {
     if (!valid) return false;
 
     if (bufferPos >= compressedData.size()) {
+        valid = false;
+        return false;
+    }
+    termFreqScoreIndex++;
+    if (termFreqScoreIndex >= termFreqScore.size()) {
         valid = false;
         return false;
     }
@@ -51,6 +60,14 @@ bool InvertedListPointer::nextGEQ(int docID) {
 
 int InvertedListPointer::getDocID() const {
     return currentDocID;
+}
+
+float InvertedListPointer::getTFS() const {
+    return termFreqScore[termFreqScoreIndex];
+}
+
+float InvertedListPointer::getIDF() const {
+    return lexEntry.IDF;
 }
 
 int InvertedListPointer::getTF() const {
@@ -113,6 +130,8 @@ void InvertedIndex::loadLexicon(const std::string &lexiconFilename) {
         lexiconFile.read(reinterpret_cast<char*>(&entry.length), sizeof(entry.length));
         lexiconFile.read(reinterpret_cast<char*>(&entry.docFrequency), sizeof(entry.docFrequency));
         lexiconFile.read(reinterpret_cast<char*>(&entry.blockCount), sizeof(entry.blockCount));
+
+        entry.IDF = log((documentLen - entry.docFrequency + 0.5) / (entry.docFrequency + 0.5));
 
         // If using blocking, read block metadata
         if (entry.blockCount > 0) {
@@ -310,7 +329,7 @@ void QueryProcessor::processQuery(const std::string &query, bool conjunctive) {
                 if (anyEnd) break;
                 continue;
             }
-
+            // allMatch equal to true
             // All pointers are at the same docID
             int docID = maxDocID;
             double totalScore = 0.0;
@@ -319,12 +338,13 @@ void QueryProcessor::processQuery(const std::string &query, bool conjunctive) {
                 const std::string &term = tp.first;
 
                 // Compute BM25 score
-                int tf = ptr.getTF(); // Assuming TF = 1
-                int docLength = docLengths[docID];
-                int df = invertedIndex.getDocFrequency(term);
-                double idf = std::log((totalDocs - df + 0.5) / (df + 0.5));
-                double K = k1 * ((1 - b) + b * (static_cast<double>(docLength) / avgDocLength));
-                double bm25Score = idf * ((k1 + 1) * tf) / (K + tf);
+                // int tf = ptr.getTF(); // Assuming TF = 1
+                // int docLength = docLengths[docID];
+                // int df = invertedIndex.getDocFrequency(term);
+                // double idf = std::log((totalDocs - df + 0.5) / (df + 0.5));
+                // double K = k1 * ((1 - b) + b * (static_cast<double>(docLength) / avgDocLength));
+                // double bm25Score = idf * ((k1 + 1) * tf) / (K + tf);
+                float bm25Score = ptr.getIDF() * ptr.getTFS();
                 totalScore += bm25Score;
 
                 ptr.next();  // Advance pointer for next iteration
@@ -371,12 +391,13 @@ void QueryProcessor::processQuery(const std::string &query, bool conjunctive) {
             int docID = ptr->getDocID();
 
             // Compute BM25 score
-            int tf = ptr->getTF(); // Assuming TF = 1
-            int docLength = docLengths[docID];
-            int df = invertedIndex.getDocFrequency(term);
-            double idf = std::log((totalDocs - df + 0.5) / (df + 0.5));
-            double K = k1 * ((1 - b) + b * (static_cast<double>(docLength) / avgDocLength));
-            double bm25Score = idf * ((k1 + 1) * tf) / (K + tf);
+            // int tf = ptr->getTF(); // Assuming TF = 1
+            // int docLength = docLengths[docID];
+            // int df = invertedIndex.getDocFrequency(term);
+            // double idf = std::log((totalDocs - df + 0.5) / (df + 0.5));
+            // double K = k1 * ((1 - b) + b * (static_cast<double>(docLength) / avgDocLength));
+            // double bm25Score = idf * ((k1 + 1) * tf) / (K + tf);
+            float bm25Score = ptr->getIDF() * ptr->getTFS();
 
             docScores[docID] += bm25Score;
 
@@ -415,7 +436,7 @@ void QueryProcessor::processQuery(const std::string &query, bool conjunctive) {
     }
 }
 // --- Main Function ---
-
+#include <chrono>
 int main() {
     QueryProcessor qp("../data/index.bin", "../data/lexicon.bin", "../data/page_table.bin", "../data/doc_lengths.bin");
 
@@ -426,7 +447,7 @@ int main() {
     while (true) {
         std::cout << "\nEnter your query (or type 'exit' to quit): ";
         std::getline(std::cin, query);
-
+        
         if (query == "exit") {
             break;
         }
@@ -435,8 +456,10 @@ int main() {
         std::getline(std::cin, mode);
 
         bool conjunctive = (mode == "AND" || mode == "and");
-
+        auto startTime = std::chrono::high_resolution_clock::now();
         qp.processQuery(query, conjunctive);
+        auto endTime = std::chrono::high_resolution_clock::now();
+        std::cout << "time passed: " << std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() << std::endl;
     }
 
     return 0;

@@ -16,6 +16,7 @@ struct LexiconEntry {
     int32_t blockCount;
     std::vector<int32_t> blockMaxDocIDs; // Maximum docID in each block
     std::vector<int64_t> blockOffsets;   // Offset of each block in the index file
+    float IDF;
 };
 
 class InvertedListPointer {
@@ -24,9 +25,11 @@ public:
     bool next();
     bool nextGEQ(int docID);
     int getDocID() const;
+    float getTFS() const;
     int getTF() const; 
     bool isValid() const;
     void close();
+    float getIDF() const;
 private:
     std::ifstream *indexFile;
     LexiconEntry lexEntry;
@@ -34,7 +37,9 @@ private:
     bool valid;
     int lastDocID;
     size_t bufferPos;
+    size_t termFreqScoreIndex;
     std::vector<unsigned char> compressedData;
+    std::vector<float> termFreqScore;
 };
 
 class InvertedIndex {
