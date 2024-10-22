@@ -3,5 +3,4 @@
 *.dat
 *.bin
 *.exe
-/build/*
 /data/*
