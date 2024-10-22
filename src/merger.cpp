@@ -220,9 +220,11 @@ void writeLexiconToFile(const std::unordered_map<std::string, LexiconEntry> &lex
     logMessage("Lexicon written to file.");
 }
 
+#include <chrono>
 int main()
 {
     // Read the number of temp files generated
+    auto startTime = std::chrono::high_resolution_clock::now();
     int numTempFiles = 0;
     while (true)
     {
@@ -249,6 +251,9 @@ int main()
     writeLexiconToFile(lexicon);
 
     logMessage("Merging process completed.");
+    auto endTime = std::chrono::high_resolution_clock::now();
+    std::cout << "time passed: " << std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() << std::endl;
+    logMessage("Time passed:" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count()));
 
     return 0;
 }

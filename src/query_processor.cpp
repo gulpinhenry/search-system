@@ -436,7 +436,7 @@ void QueryProcessor::processQuery(const std::string &query, bool conjunctive) {
     }
 }
 // --- Main Function ---
-
+#include <chrono>
 int main() {
     QueryProcessor qp("../data/index.bin", "../data/lexicon.bin", "../data/page_table.bin", "../data/doc_lengths.bin");
 
@@ -447,7 +447,7 @@ int main() {
     while (true) {
         std::cout << "\nEnter your query (or type 'exit' to quit): ";
         std::getline(std::cin, query);
-
+        
         if (query == "exit") {
             break;
         }
@@ -456,8 +456,10 @@ int main() {
         std::getline(std::cin, mode);
 
         bool conjunctive = (mode == "AND" || mode == "and");
-
+        auto startTime = std::chrono::high_resolution_clock::now();
         qp.processQuery(query, conjunctive);
+        auto endTime = std::chrono::high_resolution_clock::now();
+        std::cout << "time passed: " << std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() << std::endl;
     }
 
     return 0;
