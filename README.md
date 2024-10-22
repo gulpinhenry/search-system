@@ -13,3 +13,6 @@ A search system that creates an inverted index from a large set of text passages
 ## Dataset
 
 MS MARCO passage-ranking dataset provided by Microsoft, which consists of 8.8 million passages.
+
+## Notes
+[View full report](./doc/report.pdf)
