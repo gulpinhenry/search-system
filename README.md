@@ -1,37 +1,15 @@
-# Installation and Build Instructions
-**Pull with Git LFS**:
-    ```sh
-    git lfs pull
-    ```
-1. **Install `make`**:
-    ```sh
-    sudo apt-get install make
-    ```
+# Web Search Engines - Search System
 
-2. **Navigate to the source directory**:
-    ```sh
-    cd search_system/src
-    ```
+## Overview
 
-3. **Build the project**:
-    ```sh
-    make
-    ```
+A search system that creates an inverted index from a large set of text passages and returns ranked search results based on user queries.
 
-4. **Clean up old builds before recompiling**:
-    ```sh
-    make clean
-    ```
+## Team Members
 
-5. **Run the parser and indexer**:
-    ```sh
-    ../build/parser_and_indexer
-    ```
+- Henry Kam
+- Zeng Zhuo
 
-5. **Run the merger**:
-    ```sh
-    ../build/merger
-    ```
 
-[MSMarco Passage Ranking dataset](https://microsoft.github.io/msmarco/Datasets.html) extract collection.tsv into data directory
-    
+## Dataset
+
+MS MARCO passage-ranking dataset provided by Microsoft, which consists of 8.8 million passages.
