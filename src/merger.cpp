@@ -51,7 +51,8 @@ void saveAndClearCurPostingsList(std::vector<std::pair<int, float>> &postingsLis
         termFScores[i] = postingsList[i].second;
     }
     // Compress docID gaps
-    std::vector<unsigned char> compressedDocIDs = varbyteEncodeList(docIDGaps);
+    std::vector<unsigned char> compressedDocIDs;
+    varbyteEncodeList(docIDGaps, compressedDocIDs);
     // Write to index file
     int64_t offsetBefore = offset;
     indexFile.write(reinterpret_cast<char *>(compressedDocIDs.data()), compressedDocIDs.size());

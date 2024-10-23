@@ -1,24 +1,24 @@
 #include "compression.h"
 
 // Function to varbyte encode a single number
-std::vector<unsigned char> varbyteEncode(int number) {
-    std::vector<unsigned char> bytes;
+void varbyteEncode(int number, std::vector<unsigned char> &encodedNumber) {
+    encodedNumber.clear();
+    std::vector<unsigned char> &bytes = encodedNumber;
     while (number >= 128) {
-        bytes.push_back((number % 128) | 128);  // Set MSB
+        bytes.emplace_back((number % 128) | 128);  // Set MSB
         number /= 128;
     }
-    bytes.push_back(number);  // Final byte with MSB unset
-    return bytes;
+    bytes.emplace_back(number);  // Final byte with MSB unset
 }
 
 // Function to varbyte encode a list of numbers
-std::vector<unsigned char> varbyteEncodeList(const std::vector<int> &numbers) {
-    std::vector<unsigned char> encoded;
+void varbyteEncodeList(const std::vector<int> &numbers, std::vector<unsigned char> &encoded) {
+    encoded.clear();
+    std::vector<unsigned char> encodedNumber;
     for (int number : numbers) {
-        std::vector<unsigned char> encodedNumber = varbyteEncode(number);
+        varbyteEncode(number, encodedNumber);
         encoded.insert(encoded.end(), encodedNumber.begin(), encodedNumber.end());
     }
-    return encoded;
 }
 
 // Function to varbyte decode a list of bytes back into integers
@@ -33,13 +33,13 @@ std::vector<int> varbyteDecodeList(const std::vector<unsigned char> &bytes) {
             shift += 7;
         } else {  // Last byte of the number
             number += byte << shift;
-            decoded.push_back(number);
+            decoded.emplace_back(number);
             number = 0;
             shift = 0;
         }
     }
 
-    return decoded;
+    return std::move(decoded);
 }
 
 int varbyteDecodeNumber(const std::vector<unsigned char> &data, size_t &pos) {

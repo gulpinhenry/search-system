@@ -2,22 +2,14 @@
 #ifndef QUERY_PROCESSOR_H
 #define QUERY_PROCESSOR_H
 
+#include "lexicon_entry.h"
 #include <string>
 #include <unordered_map>
 #include <vector>
 #include <cstdint>
 #include <fstream>
 
-// Lexicon entry structure
-struct LexiconEntry {
-    int64_t offset;
-    int32_t length;
-    int32_t docFrequency;
-    int32_t blockCount;
-    std::vector<int32_t> blockMaxDocIDs; // Maximum docID in each block
-    std::vector<int64_t> blockOffsets;   // Offset of each block in the index file
-    float IDF;
-};
+
 
 class InvertedListPointer {
 public:

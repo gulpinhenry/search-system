@@ -14,6 +14,10 @@ merger: merger.cpp compression.cpp
 	$(CXX) $(CXXFLAGS) -o ../build/merger merger.cpp compression.cpp
 	../build/merger
 
+temp_file_merger: merge_temp_file.cpp thread_pool.cpp file_read_buffer.cpp
+	$(CXX) $(CXXFLAGS) -g -o ../build/temp_file_merger merge_temp_file.cpp thread_pool.cpp file_read_buffer.cpp compression.cpp -lpthread
+	../build/temp_file_merger
+
 query_processor: query_processor.cpp compression.cpp
 	$(CXX) $(CXXFLAGS) -o ../build/query_processor query_processor.cpp compression.cpp 
 	../build/query_processor

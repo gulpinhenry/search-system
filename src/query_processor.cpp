@@ -113,6 +113,7 @@ void InvertedIndex::loadLexicon(const std::string &lexiconFilename) {
         std::cerr << "Error opening lexicon file: " << lexiconFilename << std::endl;
         return;
     }
+    uint32_t termCount = 0; // Counter for terms read
 
     while (lexiconFile.peek() != EOF) {
         uint16_t termLength;
@@ -149,6 +150,12 @@ void InvertedIndex::loadLexicon(const std::string &lexiconFilename) {
         }
 
         lexicon[term] = entry;
+        termCount++;
+
+        // Output every 10000 terms
+        if (termCount % 10000 == 0) {
+            std::cout << "Read term: " << term << " (Total terms read: " << termCount << ")" << std::endl;
+        }
     }
     lexiconFile.close();
 }

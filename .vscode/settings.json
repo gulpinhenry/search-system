@@ -88,6 +88,7 @@
         "condition_variable": "cpp",
         "semaphore": "cpp",
         "unordered_set": "cpp",
-        "future": "cpp"
+        "future": "cpp",
+        "cinttypes": "cpp"
     }
 }
