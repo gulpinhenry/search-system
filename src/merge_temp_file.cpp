@@ -11,6 +11,7 @@
 #include <queue>
 #include <tuple>
 #include <unordered_map>
+#include <map>
 #include <cstdint>
 #include <functional>
 #include <filesystem>
@@ -105,7 +106,7 @@ void mergeFiles(const std::vector<std::string> &fileNames, const std::string &ou
     }
 }
 void saveAndClearCurPostingsList(std::vector<std::pair<int, float>> &postingsList, int64_t &offset,
-                                 WriteFileBuffer &indexFile, std::unordered_map<std::string, LexiconEntry> &lexicon,
+                                 WriteFileBuffer &indexFile, std::vector<std::pair<std::string, LexiconEntry>> &lexicon,
                                  std::string &currentTerm, std::string &term, std::vector<unsigned char> &compressedDocIDs)
 {
     // Process postingsList for currentTerm
@@ -136,7 +137,7 @@ void saveAndClearCurPostingsList(std::vector<std::pair<int, float>> &postingsLis
     entry.length = compressedDocIDs.size();
     entry.docFrequency = df;
     entry.blockCount = 0; // Not using blocking in this version
-    lexicon[currentTerm] = entry;
+    lexicon.emplace_back(currentTerm, entry);
     // Reset for new term
     currentTerm = term;
     postingsList.clear();
@@ -150,7 +151,7 @@ std::string getIndexFileName(const std::string &startTerm)
 void mergeLastTempFileWithPartition(std::vector<std::string> inputFiles,
                                     const std::string &partitionTerm,
                                     const std::string &endTerm,
-                                    std::unordered_map<std::string, LexiconEntry> &lexicon)
+                                    std::vector<std::pair<std::string, LexiconEntry>> &lexicon)
 {
     int numFiles = inputFiles.size();
     // Open all temp files
@@ -285,20 +286,24 @@ void mergeBinaryFiles(const std::vector<std::string> &inputFiles, const std::str
 }
 
 void mergeLastTempFile(std::vector<std::string> inputFiles,
-                       std::unordered_map<std::string, LexiconEntry> &lexicon,
+                       std::vector<std::pair<std::string, LexiconEntry>> &lexicon,
                        std::vector<std::string> termsVec,
                        ThreadPool &threadPool)
 {
     termsVec.push_back(""); // add the end term
-    std::vector<std::unordered_map<std::string, LexiconEntry>> lexicons(termsVec.size());
+    std::vector<std::vector<std::pair<std::string, LexiconEntry>>> orderedLexicons(termsVec.size());
     for (int i = 0; i < termsVec.size(); i++)
     {
         std::cout << "Term: " + termsVec[i] << std::endl;
         auto start = i == 0 ? "" : termsVec[i - 1];
         auto end = termsVec[i];
-        auto task = [inputFiles, start, end, &lexicons, i]
+        auto task = [inputFiles, start, end, i, &orderedLexicons]
         {
-            mergeLastTempFileWithPartition(inputFiles, start, end, lexicons[i]);
+            mergeLastTempFileWithPartition(inputFiles, start, end, orderedLexicons[i]);
+            // std::sort(orderedLexicons[i].begin(), orderedLexicons[i].end(), [](const std::pair<std::string, LexiconEntry>& a, 
+            //              const std::pair<std::string, LexiconEntry>& b) {
+            //     return a.first < b.first; // Compare based on the string key
+            // });
         };
         threadPool.enqueue(task);
     }
@@ -307,7 +312,7 @@ void mergeLastTempFile(std::vector<std::string> inputFiles,
     lexicon.clear();
     int64_t offset = 0;
     std::string term = "";
-    for (auto l : lexicons)
+    for (auto l : orderedLexicons)
     { // pretty dangerous here should work cause the set should be iterated in order
         for (auto entry : l)
         {
@@ -315,9 +320,10 @@ void mergeLastTempFile(std::vector<std::string> inputFiles,
             {
                 std::cerr << "incorrect order" << std::endl;
             }
+            term = entry.first;
             entry.second.offset = offset;
             offset += entry.second.docFrequency * sizeof(float) + entry.second.length; // add cur entry's size
-            lexicon[entry.first] = entry.second;
+            lexicon.emplace_back(entry.first, entry.second);
             if (cnt++ % 10000 == 0) {
             std::cout << "Merging lexicon: " << entry.first << entry.second.docFrequency <<std::endl;
         }
@@ -332,7 +338,7 @@ void mergeLastTempFile(std::vector<std::string> inputFiles,
 }
 
 // Function to write the lexicon to a file
-void writeLexiconToFile(const std::unordered_map<std::string, LexiconEntry> &lexicon)
+void writeLexiconToFile(const std::vector<std::pair<std::string, LexiconEntry>> &lexicon)
 {
     WriteFileBuffer lexiconFile("../data/lexicon.bin", CHUNK_SIZE);
     uint32_t cnt = 0;
@@ -419,7 +425,7 @@ int main()
         }
         else
         {
-            std::unordered_map<std::string, LexiconEntry> lexicon;
+            std::vector<std::pair<std::string, LexiconEntry>> lexicon;
             std::cout << "Merging into one last file" << std::endl;
             std::vector<std::string> termsVec;
             for (auto c = 'a'; c <= 'z'; c++)
