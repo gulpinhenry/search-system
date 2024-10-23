@@ -18,6 +18,7 @@
 #include <ctime>
 #include <algorithm>
 #include <cmath>
+#include <query_processor.h>
 
 namespace fs = std::filesystem;
 
@@ -169,7 +170,7 @@ void mergeLastTempFileWithPartition(std::vector<std::string> inputFiles,
     }
 
     // Output index file
-    WriteFileBuffer indexFile(getIndexFileName(partitionTerm), CHUNK_SIZE);
+    WriteFileBuffer indexFile(getIndexFileName(endTerm), CHUNK_SIZE);
 
     // Priority queue for merging
     TupleComparator cmp = [](const std::tuple<std::string, int, int, float> &a,
@@ -241,48 +242,58 @@ void mergeLastTempFileWithPartition(std::vector<std::string> inputFiles,
     {
         saveAndClearCurPostingsList(postingsList, offset, indexFile, lexicon, currentTerm, currentTerm, compressedDocIDs);
     }
-
+    std::cout << "Total write for" << getIndexFileName(endTerm) << " is " << offset << std::endl;
     // don't need to close files
     logMessage("Merging completed.");
 }
 
-void mergeBinaryFiles(const std::vector<std::string> &inputFiles, const std::string &outputFile)
+void mergeBinaryFiles(const std::vector<std::string> &filenames,
+                      std::vector<std::vector<std::pair<std::string, LexiconEntry>>> &lexicons,
+                      const std::string &outputFilename,
+                      std::vector<std::pair<std::string, LexiconEntry>> &outputLexicon)
 {
-    std::ofstream outStream(outputFile, std::ios::binary);
-
-    if (!outStream)
+    WriteFileBuffer outputFile(outputFilename, CHUNK_SIZE);
+    std::cout << "Start merging binary file"
+              << filenames.size()
+              << "<-should be equal->"
+              << lexicons.size() << std::endl;
+    int64_t offset = 0;
+#define MERGE_BUFFER_LEN 500000
+    char buffer[MERGE_BUFFER_LEN];
+    for (int i = 0; i < lexicons.size(); i++)
     {
-        std::cerr << "Error opening output file: " << outputFile << std::endl;
-        return;
-    }
-
-    for (const auto &inputFile : inputFiles)
-    {
-        std::ifstream inStream(inputFile, std::ios::binary);
-
-        if (!inStream)
+        std::string filename = filenames[i];
+        std::cout << "Merging  " << filename << " in one." << std::endl;
+        std::ifstream inputFile(filename, std::ios::binary);
+        int64_t totalRead = 0, fileTotalLen = 0;
+        if (!inputFile)
         {
-            std::cerr << "Error opening input file: " << inputFile << std::endl;
-            continue; // Skip this file and move to the next
+            std::cerr << "Error: Could not open input file " << filename << std::endl;
+            continue; // Skip this file and continue with the next
         }
+        std::cout << "file open successfully" << std::endl;
 
-        // Buffer to hold the data read from the input file
-        char buffer[40960]; // Adjust buffer size as needed
-
-        // Read data from input file and write to output file
-        while (inStream.read(buffer, sizeof(buffer)))
+        for (auto &pair : lexicons[i])
         {
-            outStream.write(buffer, inStream.gcount());
+            std::string term = pair.first;
+            auto lexicon = pair.second;
+            auto totalLen = lexicon.length + lexicon.docFrequency * sizeof(float);
+            lexicon.offset = offset;
+            offset += totalLen;
+            fileTotalLen += totalLen;
+            outputLexicon.emplace_back(term, lexicon);
         }
-
-        // Write any remaining bytes after the last read
-        outStream.write(buffer, inStream.gcount());
-
-        inStream.close(); // Close input file
+        for (size_t bytesRead = 0; bytesRead < fileTotalLen;)
+        {
+            size_t toRead = std::min((uint64_t)MERGE_BUFFER_LEN, fileTotalLen - bytesRead);
+            inputFile.read(buffer, toRead);
+            size_t actuallyRead = inputFile.gcount(); // Get the actual number of bytes read
+            totalRead += actuallyRead;
+            outputFile.write(buffer, actuallyRead);
+            bytesRead += actuallyRead;
+        }
+        inputFile.close();
     }
-
-    outStream.close(); // Close output file
-    std::cout << "Files merged successfully into: " << outputFile << std::endl;
 }
 
 void mergeLastTempFile(std::vector<std::string> inputFiles,
@@ -291,7 +302,8 @@ void mergeLastTempFile(std::vector<std::string> inputFiles,
                        ThreadPool &threadPool)
 {
     termsVec.push_back(""); // add the end term
-    std::vector<std::vector<std::pair<std::string, LexiconEntry>>> orderedLexicons(termsVec.size());
+    std::vector<std::vector<std::pair<std::string, LexiconEntry>>> orderedLexicons(termsVec.size(),
+                                                                                   std::vector<std::pair<std::string, LexiconEntry>>());
     for (int i = 0; i < termsVec.size(); i++)
     {
         std::cout << "Term: " + termsVec[i] << std::endl;
@@ -300,10 +312,6 @@ void mergeLastTempFile(std::vector<std::string> inputFiles,
         auto task = [inputFiles, start, end, i, &orderedLexicons]
         {
             mergeLastTempFileWithPartition(inputFiles, start, end, orderedLexicons[i]);
-            // std::sort(orderedLexicons[i].begin(), orderedLexicons[i].end(), [](const std::pair<std::string, LexiconEntry>& a, 
-            //              const std::pair<std::string, LexiconEntry>& b) {
-            //     return a.first < b.first; // Compare based on the string key
-            // });
         };
         threadPool.enqueue(task);
     }
@@ -311,30 +319,12 @@ void mergeLastTempFile(std::vector<std::string> inputFiles,
     uint32_t cnt = 0;
     lexicon.clear();
     int64_t offset = 0;
-    std::string term = "";
-    for (auto l : orderedLexicons)
-    { // pretty dangerous here should work cause the set should be iterated in order
-        for (auto entry : l)
-        {
-            if (term > entry.first)
-            {
-                std::cerr << "incorrect order" << std::endl;
-            }
-            term = entry.first;
-            entry.second.offset = offset;
-            offset += entry.second.docFrequency * sizeof(float) + entry.second.length; // add cur entry's size
-            lexicon.emplace_back(entry.first, entry.second);
-            if (cnt++ % 10000 == 0) {
-            std::cout << "Merging lexicon: " << entry.first << entry.second.docFrequency <<std::endl;
-        }
-        }
-    }
     std::vector<std::string> fileNames;
-    for (int i = 0; i < termsVec.size() - 1; i++) // ignore the last end term
+    for (int i = 0; i < termsVec.size(); i++) // ignore the last end term
     {
         fileNames.push_back(getIndexFileName(termsVec[i]));
     }
-    mergeBinaryFiles(fileNames, "../data/index.bin");
+    mergeBinaryFiles(fileNames, orderedLexicons, "../data/index.bin", lexicon);
 }
 
 // Function to write the lexicon to a file
@@ -344,8 +334,9 @@ void writeLexiconToFile(const std::vector<std::pair<std::string, LexiconEntry>> 
     uint32_t cnt = 0;
     for (const auto &[term, entry] : lexicon)
     {
-        if (cnt++ % 10000 == 0) {
-            std::cout << "Lexicon: " << term << entry.length <<std::endl;
+        if (cnt++ % 10000 == 0)
+        {
+            std::cout << "Lexicon: " << term << entry.length << std::endl;
         }
         // Write term length and term
         uint16_t termLength = static_cast<uint16_t>(term.length());
@@ -441,21 +432,6 @@ int main()
             break;
         }
     }
-
-    // if (filesToMerge.size() == 1)
-    // {
-    //     std::string finalOutputFile = "../data/intermediate/temp_merger_final.bin";
-    //     std::string currentFinalFile = filesToMerge[0];
-
-    //     // Rename the final output file
-    //     if (std::rename(currentFinalFile.c_str(), finalOutputFile.c_str()) != 0)
-    //     {
-    //         std::cerr << "Error renaming the final output file." << std::endl;
-    //         return 1;
-    //     }
-
-    //     std::cout << "Final merged file: " << finalOutputFile << std::endl;
-    // }
 
     logMessage("Merging process completed.");
     auto endTime = std::chrono::high_resolution_clock::now();
