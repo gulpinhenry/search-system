@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Search Interface</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f0f0f0;
+      margin: 0;
+      padding: 20px;
+    }
+    .container {
+      max-width: 600px;
+      margin: auto;
+      background-color: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    }
+    h1 {
+      text-align: center;
+      color: #333;
+    }
+    .input-group {
+      margin-bottom: 15px;
+    }
+    .input-group label {
+      display: block;
+      margin-bottom: 5px;
+    }
+    .input-group input, .input-group select {
+      width: 100%;
+      padding: 10px;
+      margin-top: 5px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    .results {
+      margin-top: 20px;
+    }
+    .result-item {
+      background-color: #fafafa;
+      padding: 10px;
+      margin-bottom: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    .btn {
+      width: 100%;
+      padding: 10px;
+      background-color: #28a745;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .btn:hover {
+      background-color: #218838;
+    }
+    .loading-text {
+      text-align: center;
+      margin-top: 10px;
+      color: #555;
+      font-style: italic;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Search Interface</h1>
+    <div class="input-group">
+      <label for="query">Enter Query:</label>
+      <input type="text" id="query" placeholder="Enter your query">
+    </div>
+    <div class="input-group">
+      <label for="mode">Choose Mode:</label>
+      <select id="mode">
+        <option value="AND">AND</option>
+        <option value="OR" selected>OR</option>
+      </select>
+    </div>
+    <button class="btn" onclick="performSearch()">Search</button>
+
+    <div class="loading-text" id="loading-text">Searching, please wait...</div>
+    <div class="results" id="results"></div>
+  </div>
+
+  <script>
+    async function performSearch() {
+      const query = document.getElementById('query').value;
+      const mode = document.getElementById('mode').value;
+      const resultsContainer = document.getElementById('results');
+      const loadingText = document.getElementById('loading-text');
+
+      resultsContainer.innerHTML = ''; // Clear previous results
+      loadingText.style.display = 'block'; // Show loading text
+
+      if (!query) {
+        alert('Query cannot be empty!');
+        loadingText.style.display = 'none'; // Hide loading text
+        return;
+      }
+
+      try {
+        const response = await fetch('/search', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ query, mode }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Network response was not ok');
+        }
+
+        const data = await response.json();
+
+        loadingText.style.display = 'none'; // Hide loading text
+
+        if (data.length === 0) {
+          resultsContainer.innerHTML = '<p>No results found.</p>';
+          return;
+        }
+
+        data.forEach(item => {
+          const resultItem = document.createElement('div');
+          resultItem.className = 'result-item';
+          resultItem.innerHTML = `
+            <strong>DocID:</strong> ${item.docID}<br>
+            <strong>DocName:</strong> ${item.docName}<br>
+            <strong>Score:</strong> ${item.score}
+          `;
+          resultsContainer.appendChild(resultItem);
+        });
+      } catch (error) {
+        console.error('Error:', error);
+        loadingText.style.display = 'none'; // Hide loading text
+        resultsContainer.innerHTML = '<p>Error performing search. Please try again.</p>';
+      }
+    }
+  </script>
+</body>
+</html>

@@ -291,14 +291,14 @@ int main() {
 
     std::cout << "Welcome to the Query Processor!" << std::endl;
     while (true) {
-        std::cout << "\nEnter your query (or type 'exit' to quit): ";
+        std::cout << "\nEnter your query (or type 'exit' to quit): " << std::flush;
         std::getline(std::cin, query);
 
         if (query == "exit") {
             break;
         }
 
-        std::cout << "Choose mode (AND/OR): ";
+        std::cout << "Choose mode (AND/OR): " << std::flush;
         std::getline(std::cin, mode);
 
         bool conjunctive = (mode == "AND" || mode == "and");
