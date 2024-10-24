@@ -26,7 +26,7 @@ namespace fs = std::filesystem;
 const int BLOCK_SIZE = 128;
 const int FILES_TO_MERGE = 8;
 #define MAX_RECORDS 100000000 // max record in memory
-#define THREAD_CNT 16
+#define THREAD_CNT 8
 #define CHUNK_SIZE 40000000 // read 10MB a time
 #define PARTITION_SIZE 26
 
@@ -306,7 +306,6 @@ void mergeLastTempFile(std::vector<std::string> inputFiles,
                                                                                    std::vector<std::pair<std::string, LexiconEntry>>());
     for (int i = 0; i < termsVec.size(); i++)
     {
-        std::cout << "Term: " + termsVec[i] << std::endl;
         auto start = i == 0 ? "" : termsVec[i - 1];
         auto end = termsVec[i];
         auto task = [inputFiles, start, end, i, &orderedLexicons]

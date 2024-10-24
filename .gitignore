@@ -1,8 +1,6 @@
 *.tsv
 *.log
 *.dat
-*.txt
 *.bin
 *.exe
-/build/*
 /data/*
