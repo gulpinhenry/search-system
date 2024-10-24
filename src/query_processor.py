@@ -2,11 +2,58 @@ import struct
 import math
 from collections import defaultdict, deque
 
-# Constants for BM25
-k1 = 1.5
-b = 0.75
+document_len = 8841823
 
-# --- InvertedListPointer Implementation ---
+def varbyte_encode(number):
+    """Encode a single number using varbyte encoding."""
+    encoded_number = []
+    while number >= 128:
+        encoded_number.append((number % 128) | 128)  # Set MSB
+        number //= 128
+    encoded_number.append(number)  # Final byte with MSB unset
+    return encoded_number
+
+
+def varbyte_encode_list(numbers):
+    """Encode a list of numbers using varbyte encoding."""
+    encoded = []
+    for number in numbers:
+        encoded_number = varbyte_encode(number)
+        encoded.extend(encoded_number)
+    return encoded
+
+
+def varbyte_decode_list(bytes):
+    """Decode a list of bytes back into integers using varbyte decoding."""
+    decoded = []
+    number = 0
+    shift = 0
+
+    for byte in bytes:
+        if byte & 128:  # Continuation bit set
+            number += (byte & 127) << shift
+            shift += 7
+        else:  # Last byte of the number
+            number += byte << shift
+            decoded.append(number)
+            number = 0
+            shift = 0
+
+    return decoded
+
+
+def varbyte_decode_number(data, pos):
+    """Decode a single number from a list of bytes."""
+    number = 0
+    shift = 0
+    while pos < len(data):
+        byte = data[pos]
+        pos += 1
+        number |= (byte & 0x7F) << shift
+        if (byte & 0x80) == 0:  # Continuation bit not set
+            break
+        shift += 7
+    return number
 
 class InvertedListPointer:
     def __init__(self, index_file, lex_entry):
@@ -16,21 +63,35 @@ class InvertedListPointer:
         self.valid = True
         self.last_doc_id = 0
         self.buffer_pos = 0
+        self.term_freq_score_index = -1
         self.compressed_data = bytearray(lex_entry['length'])
-        index_file.seek(lex_entry['offset'])
-        index_file.readinto(self.compressed_data)
+        self.index_file.seek(lex_entry['offset'])
+        self.index_file.readinto(self.compressed_data)
+        # Initialize term_freq_score as a mutable bytearray
+        self.term_freq_score = bytearray(lex_entry['length'] * 4)  # Assuming float is 4 bytes
+        self.index_file.readinto(self.term_freq_score)
+
+        # Convert bytearray to list of floats
+        self.term_freq_score = list(struct.unpack(f'{len(self.term_freq_score) // 4}f', self.term_freq_score))
+        # self.term_freq_score = [0.0] * lex_entry['length']
+        # self.index_file.readinto(struct.pack(f'{len(self.term_freq_score)}f', *self.term_freq_score))
 
     def next(self):
         if not self.valid:
             return False
-        
+
         if self.buffer_pos >= len(self.compressed_data):
             self.valid = False
             return False
+        self.term_freq_score_index += 1
+        if self.term_freq_score_index >= len(self.term_freq_score):
+            self.valid = False
+            return False
 
-        gap = self.varbyte_decode_number()
+        gap = varbyte_decode_number(self.compressed_data, self.buffer_pos)
         self.last_doc_id += gap
         self.current_doc_id = self.last_doc_id
+
         return True
 
     def next_geq(self, doc_id):
@@ -42,8 +103,11 @@ class InvertedListPointer:
     def get_doc_id(self):
         return self.current_doc_id
 
-    def get_tf(self):
-        return 1  # TF is not stored, return a default value
+    def get_tfs(self):
+        return self.term_freq_score[self.term_freq_score_index]
+
+    def get_idf(self):
+        return self.lex_entry['IDF']
 
     def is_valid(self):
         return self.valid
@@ -51,12 +115,6 @@ class InvertedListPointer:
     def close(self):
         self.valid = False
 
-    def varbyte_decode_number(self):
-        # Implement varbyte decoding
-        # Placeholder function
-        return 1  # Dummy return for the sake of example
-
-# --- InvertedIndex Implementation ---
 
 class InvertedIndex:
     def __init__(self, index_filename, lexicon_filename):
@@ -71,14 +129,25 @@ class InvertedIndex:
                 if not term_length_bytes:
                     break
                 term_length = struct.unpack('H', term_length_bytes)[0]
-                term = lexicon_file.read(term_length).decode('utf-8')
+
+                term_buffer = lexicon_file.read(term_length)
+                term = term_buffer.decode('utf-8')
 
                 entry = {
-                    'offset': struct.unpack('I', lexicon_file.read(4))[0],
+                    'offset': struct.unpack('Q', lexicon_file.read(8))[0],
                     'length': struct.unpack('I', lexicon_file.read(4))[0],
                     'doc_frequency': struct.unpack('I', lexicon_file.read(4))[0],
-                    'block_count': struct.unpack('I', lexicon_file.read(4))[0]
+                    'block_count': struct.unpack('I', lexicon_file.read(4))[0],
+                    'IDF': 0.0,
+                    'block_max_doc_ids': [],
+                    'block_offsets': []
                 }
+                entry['IDF'] = math.log((document_len - entry['doc_frequency'] + 0.5) / (entry['doc_frequency'] + 0.5))
+
+                if entry['block_count'] > 0:
+                    entry['block_max_doc_ids'] = [struct.unpack('I', lexicon_file.read(4))[0] for _ in range(entry['block_count'])]
+                    entry['block_offsets'] = [struct.unpack('Q', lexicon_file.read(8))[0] for _ in range(entry['block_count'])]
+
                 self.lexicon[term] = entry
 
     def open_list(self, term):
@@ -87,31 +156,28 @@ class InvertedIndex:
     def get_list_pointer(self, term):
         return InvertedListPointer(self.index_file, self.lexicon[term])
 
-    def close_list(self, term):
-        pass  # No action needed
-
-# --- QueryProcessor Implementation ---
 
 class QueryProcessor:
     def __init__(self, index_filename, lexicon_filename, page_table_filename, doc_lengths_filename):
         self.inverted_index = InvertedIndex(index_filename, lexicon_filename)
         self.page_table = {}
         self.doc_lengths = {}
-        self.total_docs = 0
-        self.avg_doc_length = 0
         self.load_page_table(page_table_filename)
         self.load_document_lengths(doc_lengths_filename)
-
         self.total_docs = len(self.doc_lengths)
-        # Print the total number of documents
         print(f"Total Documents: {self.total_docs}")
-        
+
         total_doc_length = sum(self.doc_lengths.values())
         self.avg_doc_length = total_doc_length / self.total_docs if self.total_docs > 0 else 0
+        print(f"Average Document Length: {self.avg_doc_length}")
 
     def parse_query(self, query):
-        terms = query.split()
-        return [term.strip('.,!?').lower() for term in terms if term]
+        terms = []
+        for term in query.split():
+            term = ''.join(filter(str.isalnum, term)).lower()
+            if term:
+                terms.append(term)
+        return terms
 
     def load_page_table(self, page_table_filename):
         with open(page_table_filename, 'rb') as page_table_file:
@@ -120,7 +186,10 @@ class QueryProcessor:
                 if not doc_id_bytes:
                     break
                 doc_id = struct.unpack('I', doc_id_bytes)[0]
-                name_length = struct.unpack('H', page_table_file.read(2))[0]
+
+                name_length_bytes = page_table_file.read(2)
+                name_length = struct.unpack('H', name_length_bytes)[0]
+
                 doc_name = page_table_file.read(name_length).decode('utf-8')
                 self.page_table[doc_id] = doc_name
 
@@ -134,8 +203,14 @@ class QueryProcessor:
                 doc_length = struct.unpack('I', doc_lengths_file.read(4))[0]
                 self.doc_lengths[doc_id] = doc_length
 
+        print(f"Number of Document Lengths Loaded: {len(self.doc_lengths)}")
+        for doc_id, length in self.doc_lengths.items():
+            if length <= 0:
+                print(f"Invalid document length for DocID {doc_id}: {length}")
+
     def process_query(self, query, conjunctive):
         terms = self.parse_query(query)
+
         if not terms:
             print("No terms found in query.")
             return
@@ -151,24 +226,24 @@ class QueryProcessor:
             print("No valid terms found in query.")
             return
 
-        # DAAT Processing
         doc_scores = defaultdict(float)
 
         if conjunctive:
             doc_ids = []
-            for tp in term_pointers:
-                ptr = tp[1]
-                if not ptr.is_valid() or not ptr.next():
+            for term, ptr in term_pointers:
+                if not ptr.is_valid():
                     ptr.close()
-                    return  # One of the lists is empty
+                    return
+                if not ptr.next():
+                    ptr.close()
+                    return
                 doc_ids.append(ptr.get_doc_id())
 
             while True:
                 max_doc_id = max(doc_ids)
                 all_match = True
 
-                for i, tp in enumerate(term_pointers):
-                    ptr = tp[1]
+                for i, (term, ptr) in enumerate(term_pointers):
                     while doc_ids[i] < max_doc_id:
                         if not ptr.next_geq(max_doc_id):
                             all_match = False
@@ -178,74 +253,70 @@ class QueryProcessor:
                         all_match = False
 
                 if not all_match:
-                    if any(not tp[1].is_valid() for tp in term_pointers):
+                    if any(not ptr.is_valid() for _, ptr in term_pointers):
                         break
                     continue
 
                 doc_id = max_doc_id
                 total_score = 0.0
-                for tp in term_pointers:
-                    ptr = tp[1]
-                    term = tp[0]
-                    tf = ptr.get_tf()
-                    doc_length = self.doc_lengths[doc_id]
-                    df = self.inverted_index.lexicon[term]['doc_frequency']
-                    idf = math.log((self.total_docs - df + 0.5) / (df + 0.5)) if df > 0 else 0
-                    K = k1 * ((1 - b) + b * (doc_length / self.avg_doc_length))
-                    bm25_score = idf * ((k1 + 1) * tf) / (K + tf)
+                for term, ptr in term_pointers:
+                    bm25_score = ptr.get_idf() * ptr.get_tfs()
                     total_score += bm25_score
-                    ptr.next()  # Advance pointer for next iteration
-                doc_scores[doc_id] += total_score
+                    ptr.next()
 
-                valid_pointers = all(ptr.is_valid() for tp in term_pointers for ptr in [tp[1]])
+                doc_scores[doc_id] = total_score
+
+                valid_pointers = True
+                for i, (_, ptr) in enumerate(term_pointers):
+                    if ptr.is_valid():
+                        doc_ids[i] = ptr.get_doc_id()
+                    else:
+                        valid_pointers = False
+                        break
                 if not valid_pointers:
                     break
-
         else:
-            # Disjunctive query processing
             pq = []
-            for tp in term_pointers:
-                ptr = tp[1]
+            for term, ptr in term_pointers:
                 if ptr.is_valid() and ptr.next():
-                    pq.append((ptr, tp[0]))
+                    pq.append((ptr, term))
 
             while pq:
-                pq.sort(key=lambda x: x[0].get_doc_id())
-                ptr, term = pq.pop(0)
-                doc_id = ptr.get_doc_id()
-                tf = ptr.get_tf()
-                doc_length = self.doc_lengths[doc_id]
-                df = self.inverted_index.lexicon[term]['doc_frequency']
-                idf = math.log((self.total_docs - df + 0.5) / (df + 0.5)) if df > 0 else 0
-                K = k1 * ((1 - b) + b * (doc_length / self.avg_doc_length))
-                bm25_score = idf * ((k1 + 1) * tf) / (K + tf)
+                ptr, term = min(pq, key=lambda x: x[0].get_doc_id())
+                pq.remove((ptr, term))
 
+                doc_id = ptr.get_doc_id()
+                bm25_score = ptr.get_idf() * ptr.get_tfs()
                 doc_scores[doc_id] += bm25_score
 
                 if ptr.next():
                     pq.append((ptr, term))
 
-        # Display top results
-        if doc_scores:
-            ranked_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
-            for i, (doc_id, score) in enumerate(ranked_docs[:10]):
-                doc_name = self.page_table[doc_id]
-                print(f"{i + 1}. DocID: {doc_id}, DocName: {doc_name}, Score: {score:.4f}")
-        else:
+        for _, ptr in term_pointers:
+            ptr.close()
+
+        if not doc_scores:
             print("No documents matched the query.")
+            return
 
-# --- Example Usage ---
+        ranked_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
 
-def main():
-    qp = QueryProcessor('../data/index.bin', '../data/lexicon.bin', '../data/page_table.bin', '../data/doc_lengths.bin')
-    
+        results_count = min(10, len(ranked_docs))
+        for i in range(results_count):
+            doc_id, score = ranked_docs[i]
+            doc_name = self.page_table[doc_id]
+            print(f"{i + 1}. DocID: {doc_id}, DocName: {doc_name}, Score: {score}")
+
+
+# Main Function
+if __name__ == "__main__":
+    qp = QueryProcessor("../data/index.bin", "../data/lexicon.bin", "../data/page_table.bin", "../data/doc_lengths.bin")
+
     while True:
         query = input("\nEnter your query (or type 'exit' to quit): ")
-        if query.lower() == 'exit':
+        if query.lower() == "exit":
             break
+
         mode = input("Choose mode (AND/OR): ")
         conjunctive = mode.lower() == "and"
         qp.process_query(query, conjunctive)
-
-if __name__ == "__main__":
-    main()

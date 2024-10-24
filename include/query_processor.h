@@ -1,60 +1,13 @@
 // query_processor.h
 #ifndef QUERY_PROCESSOR_H
 #define QUERY_PROCESSOR_H
-
+#include "inverted_index.h"
+#include "lexicon_entry.h"
 #include <string>
 #include <unordered_map>
 #include <vector>
 #include <cstdint>
 #include <fstream>
-
-// Lexicon entry structure
-struct LexiconEntry {
-    int64_t offset;
-    int32_t length;
-    int32_t docFrequency;
-    int32_t blockCount;
-    std::vector<int32_t> blockMaxDocIDs; // Maximum docID in each block
-    std::vector<int64_t> blockOffsets;   // Offset of each block in the index file
-    float IDF;
-};
-
-class InvertedListPointer {
-public:
-    InvertedListPointer(std::ifstream *indexFile, const LexiconEntry &lexEntry);
-    bool next();
-    bool nextGEQ(int docID);
-    int getDocID() const;
-    float getTFS() const;
-    int getTF() const; 
-    bool isValid() const;
-    void close();
-    float getIDF() const;
-private:
-    std::ifstream *indexFile;
-    LexiconEntry lexEntry;
-    int currentDocID;
-    bool valid;
-    int lastDocID;
-    size_t bufferPos;
-    size_t termFreqScoreIndex;
-    std::vector<unsigned char> compressedData;
-    std::vector<float> termFreqScore;
-};
-
-class InvertedIndex {
-public:
-    InvertedIndex(const std::string &indexFilename, const std::string &lexiconFilename);
-    bool openList(const std::string &term);
-    InvertedListPointer getListPointer(const std::string &term);
-    void closeList(const std::string &term);
-    int getDocFrequency(const std::string &term); // New method
-private:
-    std::ifstream indexFile;
-    std::unordered_map<std::string, LexiconEntry> lexicon;
-
-    void loadLexicon(const std::string &lexiconFilename);
-};
 
 class QueryProcessor {
 public:

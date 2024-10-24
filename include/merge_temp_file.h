@@ -9,8 +9,8 @@
 #include "lexicon_entry.h"
 
 // Function prototypes
-void mergeTempFiles(int numFiles, std::unordered_map<std::string, LexiconEntry> &lexicon);
-void writeLexiconToFile(const std::unordered_map<std::string, LexiconEntry> &lexicon);
+void mergeTempFiles(int numFiles);
+
 void logMessage(const std::string &message);
 
 #endif  // MERGER_H

@@ -1,7 +1,6 @@
 CXX = g++
 CXXFLAGS = -Wall -std=c++17 -I../include -g
 
-build_and_run_all: all run_parser_and_indexer_mt run_merger run_query_processor
 
 all: clean parser_and_indexer_mt merger query_processor
 
@@ -14,8 +13,12 @@ merger: merger.cpp compression.cpp
 	$(CXX) $(CXXFLAGS) -o ../build/merger merger.cpp compression.cpp
 	../build/merger
 
+merger_mt: merge_temp_file.cpp thread_pool.cpp file_read_buffer.cpp inverted_index.cpp
+	$(CXX) $(CXXFLAGS) -g -o ../build/temp_file_merger merge_temp_file.cpp thread_pool.cpp file_read_buffer.cpp compression.cpp inverted_index.cpp -lpthread
+	../build/temp_file_merger
+
 query_processor: query_processor.cpp compression.cpp
-	$(CXX) $(CXXFLAGS) -o ../build/query_processor query_processor.cpp compression.cpp 
+	$(CXX) $(CXXFLAGS) -o ../build/query_processor query_processor.cpp compression.cpp inverted_index.cpp
 	../build/query_processor
 
 test_parse: test_bin_reader.cpp
