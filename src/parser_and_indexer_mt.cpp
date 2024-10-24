@@ -224,6 +224,6 @@ int main(int argc, char *argv[])
     auto endTime = std::chrono::high_resolution_clock::now();
 
     std::cout << "time passed: " << std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() << std::endl;
-
+    logMessage("Time passed:" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count()));
     return 0;
 }
