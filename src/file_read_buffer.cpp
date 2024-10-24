@@ -25,7 +25,6 @@ bool FileReadBuffer::readPairToVector(std::ifstream &tempFile, const int &fileIn
         {
             if (tempFile.eof() || tempFile.peek() == EOF)
             {
-                // std::cout << "Reaching end of file for" << fileIndex << std::endl;
                 if (records.size() == 0)
                     valid = false;
                 return false;
@@ -106,7 +105,6 @@ bool FileReadBuffer::readPairToVector(std::ifstream &tempFile, const int &fileIn
             if (remainingBytes > 0)
             {
                 tempFile.seekg(-(std::streamoff)(remainingBytes), std::ios::cur);
-                // std::cout << "Moving pointer back " << remainingBytes << " bytes" << std::endl;
             }
             return true;
         }
@@ -124,7 +122,6 @@ void FileReadBuffer::fillBuffer()
 
             if (!readPairToVector(fileStream, fileIndex, tupleBuffer, maxSize, chunkSize))
                 end = true;
-            // std::cout << "load record cnt: " << tupleBuffer.size() << "/" << maxSize << std::endl;
         }
         else
         {

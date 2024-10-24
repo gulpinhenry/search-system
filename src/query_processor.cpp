@@ -102,7 +102,10 @@ void QueryProcessor::loadDocumentLengths(const std::string &docLengthsFilename) 
 
     docLengthsFile.close();
 }
+#include <chrono>
+
 void QueryProcessor::processQuery(const std::string &query, bool conjunctive) {
+    auto startTime = std::chrono::high_resolution_clock::now();
     auto terms = parseQuery(query);
 
     if (terms.empty()) {
@@ -280,6 +283,9 @@ void QueryProcessor::processQuery(const std::string &query, bool conjunctive) {
         std::string docName = pageTable[docID];
         std::cout << i + 1 << ". DocID: " << docID << ", DocName: " << docName << ", Score: " << score << std::endl;
     }
+    auto endTime = std::chrono::high_resolution_clock::now();
+    std::cout << "time passed: " << std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() << std::endl;
+
 }
 // --- Main Function ---
 
