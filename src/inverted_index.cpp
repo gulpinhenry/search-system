@@ -149,16 +149,16 @@ void InvertedIndex::loadLexicon(const std::string &lexiconFilename) {
         return;
     }
 
-    const int64_t documentLen = 8841823; // Total number of documents; adjust as necessary
+    const int64_t documentLen = 8841823;
 
     while (lexiconFile.peek() != EOF) {
         uint16_t termLength;
         lexiconFile.read(reinterpret_cast<char*>(&termLength), sizeof(termLength));
-        if (!lexiconFile) break; // EOF or error
+        if (!lexiconFile) break; 
 
         std::vector<char> termBuffer(termLength);
         lexiconFile.read(termBuffer.data(), termLength);
-        if (!lexiconFile) break; // EOF or error
+        if (!lexiconFile) break; 
 
         std::string term(termBuffer.begin(), termBuffer.end());
 
