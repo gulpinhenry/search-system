@@ -1,4 +1,3 @@
-// merger.cpp
 #include "merge_temp_file.h"
 #include "file_read_buffer.h"
 #include "file_write_buffer.h"
@@ -22,12 +21,12 @@
 
 namespace fs = std::filesystem;
 
-// number of postings per block
+// Number of postings per block
 const int BLOCK_SIZE = 128;
 const int FILES_TO_MERGE = 8;
-#define MAX_RECORDS 100000000 // max record in memory
+#define MAX_RECORDS 100000000 // Max records in memory
 #define THREAD_CNT 8
-#define CHUNK_SIZE 40000000 // read 10MB a time
+#define CHUNK_SIZE 40000000   // Read 40MB at a time
 #define PARTITION_SIZE 26
 
 std::ofstream logFile("../logs/merge_temp_file.log", std::ios::app);
@@ -61,7 +60,7 @@ void mergeFiles(const std::vector<std::string> &fileNames, const std::string &ou
     std::vector<FileReadBuffer> inputFiles;
     size_t fileCnt = fileNames.size();
     inputFiles.reserve(fileCnt);
-    std::cout << "Merging for" << outputFile << std::endl;
+    std::cout << "Merging for " << outputFile << std::endl;
 
     // Open all files
     for (size_t i = 0; i < fileCnt; ++i)
@@ -106,39 +105,93 @@ void mergeFiles(const std::vector<std::string> &fileNames, const std::string &ou
         }
     }
 }
+
+// Updated function to handle block-level indexing
 void saveAndClearCurPostingsList(std::vector<std::pair<int, float>> &postingsList, int64_t &offset,
                                  WriteFileBuffer &indexFile, std::vector<std::pair<std::string, LexiconEntry>> &lexicon,
-                                 std::string &currentTerm, std::string &term, std::vector<unsigned char> &compressedDocIDs)
+                                 std::string &currentTerm, std::string &term)
 {
     // Process postingsList for currentTerm
     int df = postingsList.size();
-    // Sort postings by docID to ensure order
-    // std::sort(postingsList.begin(), postingsList.end()); // do we really need to sort it?
-    // Compute docID gaps and save termFrequencyScore
-    std::vector<int> docIDGaps(postingsList.size());
-    std::vector<float> termFScores(postingsList.size());
-    int lastDocID = 0;
-    for (size_t i = 0; i < postingsList.size(); ++i)
-    {
-        docIDGaps[i] = postingsList[i].first - lastDocID;
-        lastDocID = postingsList[i].first;
-        termFScores[i] = postingsList[i].second;
-    }
-    // Compress docID gaps
-    varbyteEncodeList(docIDGaps, compressedDocIDs);
-    // Write to index file
-    int64_t offsetBefore = offset;
-    indexFile.write(reinterpret_cast<char *>(compressedDocIDs.data()), compressedDocIDs.size());
-    size_t termFreqScoreSize = termFScores.size() * sizeof(float);
-    indexFile.write(reinterpret_cast<char *>(termFScores.data()), termFreqScoreSize);
-    offset += compressedDocIDs.size() + termFreqScoreSize;
-    // Update lexicon
+
+    // Calculate block count
+    int blockCount = (df + BLOCK_SIZE - 1) / BLOCK_SIZE; // ceil(df / BLOCK_SIZE)
+
     LexiconEntry entry;
-    entry.offset = offsetBefore;
-    entry.length = compressedDocIDs.size();
+    entry.offset = offset;
+    entry.length = 0; // Will be updated after writing all blocks
     entry.docFrequency = df;
-    entry.blockCount = 0; // Not using blocking in this version
+    entry.blockCount = blockCount;
+    entry.blockMaxDocIDs.reserve(blockCount);
+    entry.blockOffsets.reserve(blockCount);
+    entry.blockCompressedDocIDLengths.reserve(blockCount);
+    entry.blockDocCounts.reserve(blockCount);
+
+    int currentBlockIndex = 0;
+    int64_t currentOffset = offset; // Keep track of the current offset
+
+    size_t postingsProcessed = 0;
+
+    while (postingsProcessed < postingsList.size())
+    {
+        size_t blockStart = postingsProcessed;
+        size_t blockEnd = std::min(postingsProcessed + BLOCK_SIZE, postingsList.size());
+        size_t blockSize = blockEnd - blockStart;
+
+        // Prepare data for this block
+        std::vector<unsigned char> blockCompressedData;
+        std::vector<float> blockTermFScores(blockSize);
+
+        // For the first docID in the block, store as absolute value
+        int firstDocID = postingsList[blockStart].first;
+        std::vector<unsigned char> encodedNumber;
+        varbyteEncode(firstDocID, encodedNumber);
+        blockCompressedData.insert(blockCompressedData.end(), encodedNumber.begin(), encodedNumber.end());
+        blockTermFScores[0] = postingsList[blockStart].second;
+        int lastDocID = firstDocID;
+
+        // For the rest, store docID gaps
+        for (size_t i = 1; i < blockSize; ++i)
+        {
+            int docID = postingsList[blockStart + i].first;
+            int gap = docID - lastDocID;
+            varbyteEncode(gap, encodedNumber);
+            blockCompressedData.insert(blockCompressedData.end(), encodedNumber.begin(), encodedNumber.end());
+            lastDocID = docID;
+
+            blockTermFScores[i] = postingsList[blockStart + i].second;
+        }
+
+        // Record blockMaxDocID, blockOffset, compressedDocIDLength, and blockDocCount
+        int blockMaxDocID = postingsList[blockEnd - 1].first;
+        entry.blockMaxDocIDs.push_back(blockMaxDocID);
+        entry.blockOffsets.push_back(currentOffset);
+        entry.blockCompressedDocIDLengths.push_back(blockCompressedData.size());
+        entry.blockDocCounts.push_back(static_cast<int32_t>(blockSize));
+
+        // Write block data to index file
+
+        // First, write the compressed docIDs
+        indexFile.write(reinterpret_cast<char *>(blockCompressedData.data()), blockCompressedData.size());
+        currentOffset += blockCompressedData.size();
+
+        // Then, write the term frequency scores
+        size_t termFreqScoreSize = blockTermFScores.size() * sizeof(float);
+        indexFile.write(reinterpret_cast<char *>(blockTermFScores.data()), termFreqScoreSize);
+        currentOffset += termFreqScoreSize;
+
+        // Update postingsProcessed
+        postingsProcessed += blockSize;
+        currentBlockIndex++;
+    }
+
+    // Update total length
+    entry.length = currentOffset - offset;
+    offset = currentOffset;
+
+    // Add lexicon entry
     lexicon.emplace_back(currentTerm, entry);
+
     // Reset for new term
     currentTerm = term;
     postingsList.clear();
@@ -149,6 +202,7 @@ std::string getIndexFileName(const std::string &startTerm)
     return "../data/index/index_" + startTerm + ".bin";
 }
 
+// Updated to handle block-level metadata
 void mergeLastTempFileWithPartition(std::vector<std::string> inputFiles,
                                     const std::string &partitionTerm,
                                     const std::string &endTerm,
@@ -159,7 +213,6 @@ void mergeLastTempFileWithPartition(std::vector<std::string> inputFiles,
     std::vector<FileReadBuffer> tempFiles;
     for (int i = 0; i < numFiles; ++i)
     {
-        // tempFiles[i].open("../data/intermediate/temp" + std::to_string(i) + ".bin", std::ios::binary);
         tempFiles.emplace_back(inputFiles[i], i, MAX_RECORDS / THREAD_CNT / numFiles,
                                CHUNK_SIZE / THREAD_CNT / numFiles);
         if (!tempFiles[i].isValid())
@@ -202,9 +255,8 @@ void mergeLastTempFileWithPartition(std::vector<std::string> inputFiles,
     }
 
     std::string currentTerm;
-    std::vector<std::pair<int, float>> postingsList; // Stores docIDs
+    std::vector<std::pair<int, float>> postingsList; // Stores docIDs and term frequency scores
     int64_t offset = 0;
-    std::vector<unsigned char> compressedDocIDs; // Doc id buffer
 
     while (!pq.empty())
     {
@@ -218,7 +270,7 @@ void mergeLastTempFileWithPartition(std::vector<std::string> inputFiles,
 
         if (term != currentTerm)
         {
-            saveAndClearCurPostingsList(postingsList, offset, indexFile, lexicon, currentTerm, term, compressedDocIDs);
+            saveAndClearCurPostingsList(postingsList, offset, indexFile, lexicon, currentTerm, term);
         }
 
         // Add current posting to postingsList
@@ -240,71 +292,89 @@ void mergeLastTempFileWithPartition(std::vector<std::string> inputFiles,
     // Process postingsList for the last term
     if (!postingsList.empty())
     {
-        saveAndClearCurPostingsList(postingsList, offset, indexFile, lexicon, currentTerm, currentTerm, compressedDocIDs);
+        saveAndClearCurPostingsList(postingsList, offset, indexFile, lexicon, currentTerm, currentTerm);
     }
-    std::cout << "Total write for" << getIndexFileName(endTerm) << " is " << offset << std::endl;
-    // don't need to close files
-    logMessage("Merging completed.");
+    std::cout << "Total write for " << getIndexFileName(endTerm) << " is " << offset << std::endl;
+    // Log completion
+    logMessage("Merging completed for partition.");
 }
 
+// Updated function to adjust offsets for block-level data
 void mergeBinaryFiles(const std::vector<std::string> &filenames,
                       std::vector<std::vector<std::pair<std::string, LexiconEntry>>> &lexicons,
                       const std::string &outputFilename,
                       std::vector<std::pair<std::string, LexiconEntry>> &outputLexicon)
 {
     WriteFileBuffer outputFile(outputFilename, CHUNK_SIZE);
-    std::cout << "Start merging binary file"
+    std::cout << "Start merging binary files: "
               << filenames.size()
-              << "<-should be equal->"
-              << lexicons.size() << std::endl;
+              << " files (should be equal to "
+              << lexicons.size() << " lexicons)." << std::endl;
     int64_t offset = 0;
 #define MERGE_BUFFER_LEN 500000
     char buffer[MERGE_BUFFER_LEN];
-    for (int i = 0; i < lexicons.size(); i++)
+    for (size_t i = 0; i < lexicons.size(); i++)
     {
         std::string filename = filenames[i];
-        std::cout << "Merging  " << filename << " in one." << std::endl;
+        std::cout << "Merging  " << filename << " into one." << std::endl;
         std::ifstream inputFile(filename, std::ios::binary);
-        int64_t totalRead = 0, fileTotalLen = 0;
         if (!inputFile)
         {
             std::cerr << "Error: Could not open input file " << filename << std::endl;
             continue; // Skip this file and continue with the next
         }
-        std::cout << "file open successfully" << std::endl;
+        std::cout << "File opened successfully." << std::endl;
 
+        // Determine the size of the input file
+        inputFile.seekg(0, std::ios::end);
+        int64_t fileSize = inputFile.tellg();
+        inputFile.seekg(0, std::ios::beg);
+
+        // For each lexicon entry, adjust offsets
         for (auto &pair : lexicons[i])
         {
             std::string term = pair.first;
-            auto lexicon = pair.second;
-            auto totalLen = lexicon.length + lexicon.docFrequency * sizeof(float);
-            lexicon.offset = offset;
-            offset += totalLen;
-            fileTotalLen += totalLen;
+            LexiconEntry lexicon = pair.second;
+
+            // Adjust lexicon.offset to cumulative offset
+            lexicon.offset += offset;
+
+            // Adjust blockOffsets
+            for (size_t j = 0; j < lexicon.blockOffsets.size(); ++j)
+            {
+                lexicon.blockOffsets[j] += offset;
+            }
+
+            // Add to outputLexicon
             outputLexicon.emplace_back(term, lexicon);
         }
-        for (size_t bytesRead = 0; bytesRead < fileTotalLen;)
+
+        // Copy the data from input file to output file
+        while (inputFile)
         {
-            size_t toRead = std::min((uint64_t)MERGE_BUFFER_LEN, fileTotalLen - bytesRead);
-            inputFile.read(buffer, toRead);
-            size_t actuallyRead = inputFile.gcount(); // Get the actual number of bytes read
-            totalRead += actuallyRead;
-            outputFile.write(buffer, actuallyRead);
-            bytesRead += actuallyRead;
+            inputFile.read(buffer, MERGE_BUFFER_LEN);
+            std::streamsize bytesRead = inputFile.gcount();
+            if (bytesRead > 0)
+            {
+                outputFile.write(buffer, bytesRead);
+                offset += bytesRead;
+            }
         }
+
         inputFile.close();
     }
 }
 
+// Updated to initiate merging with block-level indexing
 void mergeLastTempFile(std::vector<std::string> inputFiles,
                        std::vector<std::pair<std::string, LexiconEntry>> &lexicon,
                        std::vector<std::string> termsVec,
                        ThreadPool &threadPool)
 {
-    termsVec.push_back(""); // add the end term
+    termsVec.push_back(""); // Add the end term
     std::vector<std::vector<std::pair<std::string, LexiconEntry>>> orderedLexicons(termsVec.size(),
                                                                                    std::vector<std::pair<std::string, LexiconEntry>>());
-    for (int i = 0; i < termsVec.size(); i++)
+    for (size_t i = 0; i < termsVec.size(); i++)
     {
         auto start = i == 0 ? "" : termsVec[i - 1];
         auto end = termsVec[i];
@@ -319,14 +389,14 @@ void mergeLastTempFile(std::vector<std::string> inputFiles,
     lexicon.clear();
     int64_t offset = 0;
     std::vector<std::string> fileNames;
-    for (int i = 0; i < termsVec.size(); i++) // ignore the last end term
+    for (size_t i = 0; i < termsVec.size(); i++) // Ignore the last end term
     {
         fileNames.push_back(getIndexFileName(termsVec[i]));
     }
     mergeBinaryFiles(fileNames, orderedLexicons, "../data/index.bin", lexicon);
 }
 
-// Function to write the lexicon to a file
+// Updated function to write block-level metadata
 void writeLexiconToFile(const std::vector<std::pair<std::string, LexiconEntry>> &lexicon)
 {
     WriteFileBuffer lexiconFile("../data/lexicon.bin", CHUNK_SIZE);
@@ -335,7 +405,7 @@ void writeLexiconToFile(const std::vector<std::pair<std::string, LexiconEntry>> 
     {
         if (cnt++ % 10000 == 0)
         {
-            std::cout << "Lexicon: " << term << entry.length << std::endl;
+            std::cout << "Lexicon: " << term << " Length: " << entry.length << std::endl;
         }
         // Write term length and term
         uint16_t termLength = static_cast<uint16_t>(term.length());
@@ -347,8 +417,36 @@ void writeLexiconToFile(const std::vector<std::pair<std::string, LexiconEntry>> 
         lexiconFile.write(reinterpret_cast<const char *>(&entry.length), sizeof(entry.length));
         lexiconFile.write(reinterpret_cast<const char *>(&entry.docFrequency), sizeof(entry.docFrequency));
 
-        // Since we're not using blocking, set blockCount to 0
+        // Write blockCount
         lexiconFile.write(reinterpret_cast<const char *>(&entry.blockCount), sizeof(entry.blockCount));
+
+        if (entry.blockCount > 0)
+        {
+            // Write blockMaxDocIDs
+            for (int i = 0; i < entry.blockCount; ++i)
+            {
+                int32_t blockMaxDocID = entry.blockMaxDocIDs[i];
+                lexiconFile.write(reinterpret_cast<const char *>(&blockMaxDocID), sizeof(blockMaxDocID));
+            }
+            // Write blockOffsets
+            for (int i = 0; i < entry.blockCount; ++i)
+            {
+                int64_t blockOffset = entry.blockOffsets[i];
+                lexiconFile.write(reinterpret_cast<const char *>(&blockOffset), sizeof(blockOffset));
+            }
+            // Write blockCompressedDocIDLengths
+            for (int i = 0; i < entry.blockCount; ++i)
+            {
+                size_t compressedLength = entry.blockCompressedDocIDLengths[i];
+                lexiconFile.write(reinterpret_cast<const char *>(&compressedLength), sizeof(size_t));
+            }
+            // Write blockDocCounts
+            for (int i = 0; i < entry.blockCount; ++i)
+            {
+                int32_t docCount = entry.blockDocCounts[i];
+                lexiconFile.write(reinterpret_cast<const char *>(&docCount), sizeof(docCount));
+            }
+        }
     }
 
     logMessage("Lexicon written to file.");
@@ -402,7 +500,7 @@ int main()
                 }
                 // Log the files being merged and the output filename
                 std::cout << "Enqueuing merge task for files: size: " << batchFiles.size();
-                std::cout << "-> Output file: " << outputFileName << std::endl;
+                std::cout << " -> Output file: " << outputFileName << std::endl;
                 // Enqueue the merge task to the thread pool
                 pool.enqueue([batchFiles, outputFileName]
                              { mergeFiles(batchFiles, outputFileName); });
@@ -418,7 +516,7 @@ int main()
             std::vector<std::pair<std::string, LexiconEntry>> lexicon;
             std::cout << "Merging into one last file" << std::endl;
             std::vector<std::string> termsVec;
-            for (auto c = 'a'; c <= 'z'; c++)
+            for (char c = 'a'; c <= 'z'; c++)
             {
                 termsVec.push_back(std::string(1, c));
             }
@@ -435,7 +533,7 @@ int main()
     logMessage("Merging process completed.");
     auto endTime = std::chrono::high_resolution_clock::now();
 
-    std::cout << "time passed: " << std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() << std::endl;
+    std::cout << "Time elapsed: " << std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count() << " ms" << std::endl;
 
     return 0;
 }

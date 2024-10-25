@@ -2,7 +2,7 @@ CXX = g++
 CXXFLAGS = -Wall -std=c++17 -I../include -g
 
 
-all: clean parser_and_indexer_mt merger query_processor
+all: clean parser_and_indexer_mt merger_mt query_processor
 
 
 parser_and_indexer_mt: parser_and_indexer_mt.cpp compression.cpp utils.cpp
@@ -31,4 +31,4 @@ test_merge: test_merger.cpp
 clean:
 	rm -f ../build/parser_and_indexer ../build/merger ../build/query_processor ../build/test_bin_reader
 	rm -f ../logs/*.log
-	rm -f ../data/intermediate/*.bin ../data/intermediate/*.txt ../data/intermediate/*.idx ../data/*.bin
+	rm -f ../data/intermediate/*.bin ../data/index/*.bin ../data/intermediate/*.idx ../data/*.bin

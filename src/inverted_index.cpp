@@ -8,7 +8,7 @@
 
 InvertedListPointer::InvertedListPointer(std::ifstream *indexFile, const LexiconEntry &lexEntry)
     : indexFile(indexFile), lexEntry(lexEntry), currentDocID(-1), valid(true),
-      lastDocID(0), bufferPos(0), currentBlockIndex(0), atBlockStart(true) {
+      lastDocID(0), bufferPos(0), currentBlockIndex(0), atBlockStart(true), termFreqScoreIndex(0) {
     // Initialize by loading the first block
     loadBlock(currentBlockIndex);
 }
@@ -22,29 +22,37 @@ void InvertedListPointer::loadBlock(int blockIndex) {
     currentBlockIndex = blockIndex;
     bufferPos = 0;
     compressedData.clear();
+    termFreqScores.clear();
 
-    // Compute block length
-    size_t blockLength = lexEntry.getBlockLength(blockIndex);
+    // Get the number of postings in this block
+    int postingsInBlock = lexEntry.blockDocCounts[blockIndex];
+    size_t compressedDocIDsSize = lexEntry.blockCompressedDocIDLengths[blockIndex];
 
-    // Read compressed data for the block
+    // Read compressed docIDs
     size_t blockOffset = lexEntry.blockOffsets[blockIndex];
-
     indexFile->seekg(blockOffset, std::ios::beg);
 
-    compressedData.resize(blockLength);
-    indexFile->read(reinterpret_cast<char*>(compressedData.data()), blockLength);
+    compressedData.resize(compressedDocIDsSize);
+    indexFile->read(reinterpret_cast<char*>(compressedData.data()), compressedDocIDsSize);
 
-    // Reset position in compressed data
+    // Read term frequency scores
+    termFreqScores.resize(postingsInBlock);
+    indexFile->read(reinterpret_cast<char*>(termFreqScores.data()), postingsInBlock * sizeof(float));
+
+    // Reset bufferPos for reading docIDs
     bufferPos = 0;
     atBlockStart = true;
     lastDocID = 0;
+
+    // Reset termFreqScoreIndex
+    termFreqScoreIndex = 0;
 }
 
 bool InvertedListPointer::next() {
     if (!valid) return false;
 
     while (true) {
-        if (bufferPos >= compressedData.size()) {
+        if (termFreqScoreIndex >= termFreqScores.size()) {
             // End of current block
             currentBlockIndex++;
             if (currentBlockIndex >= lexEntry.blockCount) {
@@ -69,16 +77,9 @@ bool InvertedListPointer::next() {
         lastDocID = docID;
         currentDocID = docID;
 
-        // Ensure there is enough data to read the term frequency score
-        if (bufferPos + sizeof(float) > compressedData.size()) {
-            // Not enough data, invalid
-            valid = false;
-            return false;
-        }
-
-        // Read term frequency score safely
-        std::memcpy(&termFreqScoreValue, &compressedData[bufferPos], sizeof(float));
-        bufferPos += sizeof(float);
+        // Get term frequency score
+        termFreqScoreValue = termFreqScores[termFreqScoreIndex];
+        termFreqScoreIndex++;
 
         // Successfully read posting
         return true;
@@ -178,6 +179,18 @@ void InvertedIndex::loadLexicon(const std::string &lexiconFilename) {
             entry.blockOffsets.resize(entry.blockCount);
             for (int i = 0; i < entry.blockCount; ++i) {
                 lexiconFile.read(reinterpret_cast<char*>(&entry.blockOffsets[i]), sizeof(entry.blockOffsets[i]));
+            }
+
+            // Read blockCompressedDocIDLengths
+            entry.blockCompressedDocIDLengths.resize(entry.blockCount);
+            for (int i = 0; i < entry.blockCount; ++i) {
+                lexiconFile.read(reinterpret_cast<char*>(&entry.blockCompressedDocIDLengths[i]), sizeof(size_t));
+            }
+
+            // Read blockDocCounts
+            entry.blockDocCounts.resize(entry.blockCount);
+            for (int i = 0; i < entry.blockCount; ++i) {
+                lexiconFile.read(reinterpret_cast<char*>(&entry.blockDocCounts[i]), sizeof(entry.blockDocCounts[i]));
             }
         }
 
