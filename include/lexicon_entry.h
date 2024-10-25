@@ -10,8 +10,10 @@ struct LexiconEntry {
     int32_t length;
     int32_t docFrequency;
     int32_t blockCount;
-    std::vector<int32_t> blockMaxDocIDs; // Maximum docID in each block
-    std::vector<int64_t> blockOffsets;   // Offset of each block in the index file
+    std::vector<int32_t> blockMaxDocIDs;          // Maximum docID in each block
+    std::vector<int64_t> blockOffsets;            // Offset of each block in the index file
+    std::vector<size_t> blockCompressedDocIDLengths; // Length of compressed docIDs in each block
+    std::vector<int32_t> blockDocCounts;          // Number of postings in each block
     float IDF;
 
     // Method to get block length

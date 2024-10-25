@@ -28,9 +28,11 @@ private:
     int lastDocID;
     size_t bufferPos;
     std::vector<unsigned char> compressedData;
+    std::vector<float> termFreqScores;  // Added to store term frequency scores separately
     float termFreqScoreValue;
     int currentBlockIndex;
     bool atBlockStart;
+    size_t termFreqScoreIndex;  // Added to track position in termFreqScores
 };
 
 class InvertedIndex {
