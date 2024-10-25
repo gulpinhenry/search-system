@@ -55,3 +55,4 @@ int varbyteDecodeNumber(const std::vector<unsigned char> &data, size_t &pos) {
     }
     return number;
 }
+
