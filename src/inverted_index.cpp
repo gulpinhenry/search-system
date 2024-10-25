@@ -1,48 +1,104 @@
 #include "inverted_index.h"
 #include "compression.h"
 #include <iostream>
-#include <math.h>
-
-// Constants for BM25
-const double k1 = 1.5;
-const double b = 0.75;
-const int64_t documentLen = 8841823;
+#include <cmath>  
+#include <cstring> 
 
 // --- InvertedListPointer Implementation ---
 
 InvertedListPointer::InvertedListPointer(std::ifstream *indexFile, const LexiconEntry &lexEntry)
     : indexFile(indexFile), lexEntry(lexEntry), currentDocID(-1), valid(true),
-      lastDocID(0), bufferPos(0), termFreqScoreIndex(-1) {
-    // Read compressed data from index file
-    indexFile->seekg(lexEntry.offset, std::ios::beg);
-    compressedData.resize(lexEntry.length);
-    indexFile->read(reinterpret_cast<char*>(compressedData.data()), lexEntry.length);
-    termFreqScore.resize(lexEntry.length);
-    indexFile->read(reinterpret_cast<char*>(termFreqScore.data()), lexEntry.length * sizeof(float));
+      lastDocID(0), bufferPos(0), currentBlockIndex(0), atBlockStart(true) {
+    // Initialize by loading the first block
+    loadBlock(currentBlockIndex);
+}
+
+void InvertedListPointer::loadBlock(int blockIndex) {
+    if (blockIndex >= lexEntry.blockCount) {
+        valid = false;
+        return;
+    }
+
+    currentBlockIndex = blockIndex;
+    bufferPos = 0;
+    compressedData.clear();
+
+    // Compute block length
+    size_t blockLength = lexEntry.getBlockLength(blockIndex);
+
+    // Read compressed data for the block
+    size_t blockOffset = lexEntry.blockOffsets[blockIndex];
+
+    indexFile->seekg(blockOffset, std::ios::beg);
+
+    compressedData.resize(blockLength);
+    indexFile->read(reinterpret_cast<char*>(compressedData.data()), blockLength);
+
+    // Reset position in compressed data
+    bufferPos = 0;
+    atBlockStart = true;
+    lastDocID = 0;
 }
 
 bool InvertedListPointer::next() {
     if (!valid) return false;
 
-    if (bufferPos >= compressedData.size()) {
-        valid = false;
-        return false;
-    }
-    termFreqScoreIndex++;
-    if (termFreqScoreIndex >= termFreqScore.size()) {
-        valid = false;
-        return false;
-    }
+    while (true) {
+        if (bufferPos >= compressedData.size()) {
+            // End of current block
+            currentBlockIndex++;
+            if (currentBlockIndex >= lexEntry.blockCount) {
+                valid = false;
+                return false;
+            } else {
+                loadBlock(currentBlockIndex);
+                continue;
+            }
+        }
 
-    // Decompress next docID gap
-    int gap = varbyteDecodeNumber(compressedData, bufferPos);
-    lastDocID += gap;
-    currentDocID = lastDocID;
+        int docID;
+        if (atBlockStart) {
+            // First docID in block is stored as absolute value
+            docID = varbyteDecodeNumber(compressedData, bufferPos);
+            atBlockStart = false;
+        } else {
+            // Decompress next docID gap
+            int gap = varbyteDecodeNumber(compressedData, bufferPos);
+            docID = lastDocID + gap;
+        }
+        lastDocID = docID;
+        currentDocID = docID;
 
-    return true;
+        // Ensure there is enough data to read the term frequency score
+        if (bufferPos + sizeof(float) > compressedData.size()) {
+            // Not enough data, invalid
+            valid = false;
+            return false;
+        }
+
+        // Read term frequency score safely
+        std::memcpy(&termFreqScoreValue, &compressedData[bufferPos], sizeof(float));
+        bufferPos += sizeof(float);
+
+        // Successfully read posting
+        return true;
+    }
 }
 
 bool InvertedListPointer::nextGEQ(int docID) {
+    if (!valid) return false;
+
+    // Skip blocks where blockMaxDocID < docID
+    while (currentBlockIndex < lexEntry.blockCount && lexEntry.blockMaxDocIDs[currentBlockIndex] < docID) {
+        currentBlockIndex++;
+        if (currentBlockIndex >= lexEntry.blockCount) {
+            valid = false;
+            return false;
+        }
+        loadBlock(currentBlockIndex);
+    }
+
+    // Now, iterate through postings in the block until we find docID >= target docID
     while (valid && currentDocID < docID) {
         if (!next()) {
             return false;
@@ -56,27 +112,12 @@ int InvertedListPointer::getDocID() const {
 }
 
 float InvertedListPointer::getTFS() const {
-    return termFreqScore[termFreqScoreIndex];
+    return termFreqScoreValue;
 }
 
 float InvertedListPointer::getIDF() const {
     return lexEntry.IDF;
 }
-
-int InvertedListPointer::getTF() const {
-    // Since TF is not stored, we might return a default value
-    return 1;
-}
-
-int InvertedIndex::getDocFrequency(const std::string &term) {
-    auto it = lexicon.find(term);
-    if (it != lexicon.end()) {
-        return it->second.docFrequency;
-    } else {
-        return 0;
-    }
-}
-
 
 bool InvertedListPointer::isValid() const {
     return valid;
@@ -107,6 +148,8 @@ void InvertedIndex::loadLexicon(const std::string &lexiconFilename) {
         return;
     }
 
+    const int64_t documentLen = 8841823; // Total number of documents; adjust as necessary
+
     while (lexiconFile.peek() != EOF) {
         uint16_t termLength;
         lexiconFile.read(reinterpret_cast<char*>(&termLength), sizeof(termLength));
@@ -124,9 +167,6 @@ void InvertedIndex::loadLexicon(const std::string &lexiconFilename) {
         lexiconFile.read(reinterpret_cast<char*>(&entry.docFrequency), sizeof(entry.docFrequency));
         lexiconFile.read(reinterpret_cast<char*>(&entry.blockCount), sizeof(entry.blockCount));
 
-        entry.IDF = log((documentLen - entry.docFrequency + 0.5) / (entry.docFrequency + 0.5));
-
-        // If using blocking, read block metadata
         if (entry.blockCount > 0) {
             // Read blockMaxDocIDs
             entry.blockMaxDocIDs.resize(entry.blockCount);
@@ -141,6 +181,9 @@ void InvertedIndex::loadLexicon(const std::string &lexiconFilename) {
             }
         }
 
+        // Compute IDF
+        entry.IDF = std::log((documentLen - entry.docFrequency + 0.5) / (entry.docFrequency + 0.5));
+
         lexicon[term] = entry;
     }
     lexiconFile.close();
@@ -151,9 +194,27 @@ bool InvertedIndex::openList(const std::string &term) {
 }
 
 InvertedListPointer InvertedIndex::getListPointer(const std::string &term) {
-    return InvertedListPointer(&indexFile, lexicon[term]);
+    auto it = lexicon.find(term);
+    if (it != lexicon.end()) {
+        return InvertedListPointer(&indexFile, it->second);
+    } else {
+        // Handle term not found
+        std::cerr << "Term not found in lexicon: " << term << std::endl;
+        // Return an invalid InvertedListPointer
+        LexiconEntry emptyEntry;
+        return InvertedListPointer(nullptr, emptyEntry);
+    }
 }
 
 void InvertedIndex::closeList(const std::string &term) {
     // No action needed as we're not keeping any state per term
+}
+
+int InvertedIndex::getDocFrequency(const std::string &term) {
+    auto it = lexicon.find(term);
+    if (it != lexicon.end()) {
+        return it->second.docFrequency;
+    } else {
+        return 0;
+    }
 }

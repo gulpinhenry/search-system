@@ -1,8 +1,11 @@
-#ifndef INVERTED_INDEX
-#define INVERTED_INDEX
+#ifndef INVERTED_INDEX_H
+#define INVERTED_INDEX_H
+
 #include <fstream>
-#include "lexicon_entry.h"
 #include <unordered_map>
+#include <string>
+#include <vector>
+#include "lexicon_entry.h"
 
 class InvertedListPointer {
 public:
@@ -11,20 +14,23 @@ public:
     bool nextGEQ(int docID);
     int getDocID() const;
     float getTFS() const;
-    int getTF() const; 
     bool isValid() const;
     void close();
     float getIDF() const;
+
 private:
+    void loadBlock(int blockIndex);
+
     std::ifstream *indexFile;
     LexiconEntry lexEntry;
     int currentDocID;
     bool valid;
     int lastDocID;
     size_t bufferPos;
-    size_t termFreqScoreIndex;
     std::vector<unsigned char> compressedData;
-    std::vector<float> termFreqScore;
+    float termFreqScoreValue;
+    int currentBlockIndex;
+    bool atBlockStart;
 };
 
 class InvertedIndex {
@@ -33,11 +39,13 @@ public:
     bool openList(const std::string &term);
     InvertedListPointer getListPointer(const std::string &term);
     void closeList(const std::string &term);
-    int getDocFrequency(const std::string &term); // New method
+    int getDocFrequency(const std::string &term);
+
 private:
     std::ifstream indexFile;
     std::unordered_map<std::string, LexiconEntry> lexicon;
 
     void loadLexicon(const std::string &lexiconFilename);
 };
-#endif
+
+#endif // INVERTED_INDEX_H
